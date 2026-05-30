@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+
+# Never commit real secrets. .env.example holds empty placeholders only.
+.env
+.env.*
+!.env.example
+.dev.vars
+
+*.log
+.DS_Store
