@@ -1,0 +1,3 @@
+# Copy to .dev.vars for local `wrangler pages dev`. Never commit the real values.
+SITEPASS_PASSWORD=
+SITEPASS_SECRET=
