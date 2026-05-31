@@ -52,11 +52,37 @@ async function runInit(flags: Flags) {
   }
 
   upsertEnv(envPath, { SITEPASS_PASSWORD: password, SITEPASS_SECRET: secret })
+  const ignored = ensureGitignored(envPath)
 
   console.log(`\nWrote ${envPath}`)
   console.log(`  SITEPASS_SECRET    ${existingSecret ? 'kept existing value' : 'generated'}`)
   console.log(`  SITEPASS_PASSWORD  ${password ? 'set' : 'empty, fill it in before deploying'}`)
+  if (ignored === 'added') console.log(`\nAdded ${envPath} to .gitignore.`)
+  console.log(
+    `\nNever commit ${envPath}: SITEPASS_SECRET signs every session token, so leaking it lets anyone forge a login.`,
+  )
   console.log(`\n${snippetFor(target)}`)
+}
+
+// Keep the signing secret out of version control. A committed SITEPASS_SECRET
+// lets anyone forge a valid session token, so make sure the env file is ignored.
+function ensureGitignored(file: string): 'added' | 'present' | 'skipped' {
+  const gitignorePath = '.gitignore'
+  const hasGitignore = existsSync(gitignorePath)
+  // Only manage .gitignore in a project that actually uses git.
+  if (!hasGitignore && !existsSync('.git')) return 'skipped'
+
+  const current = hasGitignore ? readFileSync(gitignorePath, 'utf8') : ''
+  const covered = current.split('\n').some((line) => {
+    const entry = line.trim().replace(/^\//, '').replace(/\/$/, '')
+    if (!entry || entry.startsWith('#')) return false
+    return entry === file || (entry === '.env*' && file.startsWith('.env'))
+  })
+  if (covered) return 'present'
+
+  const prefix = current && !current.endsWith('\n') ? `${current}\n` : current
+  writeFileSync(gitignorePath, `${prefix}${file}\n`)
+  return 'added'
 }
 
 function runProxy(flags: Flags) {
