@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
-import { createGate, type GateOptions, readCookie } from './core'
+import { createGate, type GateOptions, readCookie, sanitizeNext } from './core'
 
 /**
  * Standalone reverse proxy that gates requests and, on pass, forwards them to a
@@ -74,7 +74,18 @@ async function handle(
 }
 
 async function forward(req: IncomingMessage, res: ServerResponse, origin: URL) {
-  const target = new URL(req.url ?? '/', origin)
+  // Pin the upstream host to the configured origin and copy only the request's
+  // path+query onto it. The host must never come from the request line: a target
+  // like "//evil.com/x" or "https://evil.com/x" arrives verbatim in req.url, and
+  // `new URL(req.url, origin)` would resolve to the attacker's host — turning the
+  // proxy into an SSRF pivot that also leaks the forwarded gate cookie. sanitizeNext
+  // collapses those forms (and CR/LF) to "/", and assigning pathname keeps the host.
+  const target = new URL(origin.href)
+  const safePath = sanitizeNext(req.url ?? '/')
+  const queryAt = safePath.indexOf('?')
+  target.pathname = queryAt === -1 ? safePath : safePath.slice(0, queryAt)
+  target.search = queryAt === -1 ? '' : safePath.slice(queryAt)
+
   const headers = new Headers()
   for (const [name, value] of Object.entries(req.headers)) {
     if (value === undefined || HOP_BY_HOP.has(name)) continue

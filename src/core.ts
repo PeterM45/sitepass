@@ -190,7 +190,12 @@ function isPublicPath(path: string, publicPaths: string[]): boolean {
   })
 }
 
-function sanitizeNext(value: string | null | undefined): string {
+/**
+ * Reduce a value to a safe, same-origin request path or "/". Used for the login
+ * `next` redirect and reused by the reverse proxy to keep a crafted request line
+ * from choosing the forward target's host.
+ */
+export function sanitizeNext(value: string | null | undefined): string {
   // Accept only same-site absolute paths. An absolute URL, a protocol-relative
   // "//host", or a "/\host" (which browsers treat as absolute) would let a crafted
   // `next` bounce a freshly logged-in visitor to another origin.
