@@ -142,3 +142,65 @@ describe('reverse proxy gating', () => {
     expect(originHits).toBe(2)
   })
 })
+
+describe('reverse proxy robustness', () => {
+  it('preserves every Set-Cookie the origin sends', async () => {
+    const origin = await listen((_req, res) => {
+      res.setHeader('Set-Cookie', ['a=1; Path=/', 'b=2; Path=/'])
+      res.end('OK')
+    })
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+    })
+
+    const token = await loginCookie(port)
+    const res = await fetch(`http://127.0.0.1:${port}/x`, { headers: { cookie: `gate=${token}` } })
+    const cookies = res.headers.getSetCookie()
+    expect(cookies).toHaveLength(2)
+    expect(cookies.some((c) => c.startsWith('a=1'))).toBe(true)
+    expect(cookies.some((c) => c.startsWith('b=2'))).toBe(true)
+  })
+
+  it('rejects an over-sized request body with 413 instead of buffering it unbounded', async () => {
+    const origin = await listen((_req, res) => res.end('OK'))
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+      maxBodyBytes: 1024,
+    })
+
+    const token = await loginCookie(port)
+    const res = await fetch(`http://127.0.0.1:${port}/upload`, {
+      method: 'POST',
+      headers: { cookie: `gate=${token}` },
+      body: 'x'.repeat(50_000),
+    })
+    expect(res.status).toBe(413)
+  })
+
+  it('survives an upstream connection reset mid-body instead of crashing the process', async () => {
+    const origin = await listen((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.write('partial')
+      res.destroy()
+    })
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+    })
+
+    const token = await loginCookie(port)
+    // The forwarded response is cut off mid-body; the proxy must not crash.
+    await fetch(`http://127.0.0.1:${port}/stream`, { headers: { cookie: `gate=${token}` } })
+      .then((r) => r.text())
+      .catch(() => {})
+
+    // Proof of life: the proxy still answers (gate-served 401, origin untouched).
+    const live = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' })
+    expect(live.status).toBe(401)
+  })
+})
