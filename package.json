@@ -133,6 +133,7 @@
   },
   "scripts": {
     "build": "tsup",
+    "prepack": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
