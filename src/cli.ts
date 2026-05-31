@@ -70,7 +70,7 @@ function ensureGitignored(file: string): 'added' | 'present' | 'skipped' {
   const gitignorePath = '.gitignore'
   const hasGitignore = existsSync(gitignorePath)
   // Only manage .gitignore in a project that actually uses git.
-  if (!hasGitignore && !existsSync('.git')) return 'skipped'
+  if (!(hasGitignore || existsSync('.git'))) return 'skipped'
 
   const current = hasGitignore ? readFileSync(gitignorePath, 'utf8') : ''
   const covered = current.split('\n').some((line) => {
