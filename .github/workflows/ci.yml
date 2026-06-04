@@ -5,16 +5,30 @@ on:
   pull_request:
 
 jobs:
-  ci:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run check
-      - run: bun run test
       - run: bun run build
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: bun install --frozen-lockfile
+      # Run the suite on the matrix Node, not Bun: the proxy and core use Node
+      # runtime APIs (node:http, node:stream, fetch/Headers), so we exercise the
+      # versions users actually run.
+      - run: node ./node_modules/.bin/vitest run
