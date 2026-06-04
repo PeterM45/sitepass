@@ -115,4 +115,22 @@ describe('createGate', () => {
     expect(res.body).not.toContain('"><script>')
     expect(res.body).toContain('&lt;script&gt;')
   })
+
+  it('11. a malicious brand accent falls back to the default instead of breaking out of <style>', async () => {
+    const g = gate({ brand: { accent: 'red; } </style><script>alert(1)</script>' } })
+    const res = asHtml(await g.handle({ method: 'GET', path: '/' }))
+    expect(res.body).not.toContain('<script>')
+    expect(res.body).not.toContain('alert(1)')
+    expect(res.body).toContain('--accent: #4f46e5')
+  })
+
+  it('12. a valid brand accent is preserved', async () => {
+    const hex = gate({ brand: { accent: '#0af' } })
+    expect(asHtml(await hex.handle({ method: 'GET', path: '/' })).body).toContain('--accent: #0af')
+
+    const fn = gate({ brand: { accent: 'rgb(10 20 30 / 50%)' } })
+    expect(asHtml(await fn.handle({ method: 'GET', path: '/' })).body).toContain(
+      '--accent: rgb(10 20 30 / 50%)',
+    )
+  })
 })

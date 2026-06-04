@@ -69,7 +69,7 @@ export function createGate(options: GateOptions): Gate {
   const brand = {
     title: options.brand?.title ?? DEFAULT_BRAND.title,
     subtitle: options.brand?.subtitle ?? DEFAULT_BRAND.subtitle,
-    accent: options.brand?.accent ?? DEFAULT_BRAND.accent,
+    accent: safeAccent(options.brand?.accent ?? DEFAULT_BRAND.accent),
   }
   const configured = options.password.length > 0 && options.secret.length > 0
 
@@ -206,6 +206,21 @@ export function sanitizeNext(value: string | null | undefined): string {
     if (value.charCodeAt(i) < 0x20) return '/'
   }
   return value
+}
+
+// The accent is interpolated into a <style> block, where escapeHtml does not
+// help: a value like "red; } </style><script>…" would close the declaration, the
+// rule, and the element. Accept only well-formed CSS colors (hex, named, or
+// rgb/hsl functional) — none of which can contain <, ;, {, }, or quotes — and
+// fall back to the default for anything else.
+function safeAccent(accent: string): string {
+  const value = accent.trim()
+  const hex = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
+  const named = /^[a-z]+$/i
+  const functional = /^(?:rgb|rgba|hsl|hsla)\([0-9.,%\s/]+\)$/i
+  return hex.test(value) || named.test(value) || functional.test(value)
+    ? value
+    : DEFAULT_BRAND.accent
 }
 
 function escapeHtml(value: string): string {
