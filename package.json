@@ -137,6 +137,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "check": "biome check .",
     "format": "biome check --write .",
     "format:unsafe": "biome check --write --unsafe ."
@@ -170,6 +171,7 @@
     "@sveltejs/kit": "^2.61.1",
     "@types/express": "^5.0.6",
     "@types/node": "^25.9.1",
+    "@vitest/coverage-v8": "4.1.7",
     "astro": "^6.4.2",
     "express": "^5.2.1",
     "hono": "^4.12.23",
