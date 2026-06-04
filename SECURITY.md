@@ -4,7 +4,7 @@
 
 Please report security issues privately. Do not open a public issue for a vulnerability.
 
-Use GitHub's private vulnerability reporting (the "Report a vulnerability" button under the repository's Security tab), or email the maintainer at the address listed on the npm package. I will acknowledge the report, work with you on a fix, and credit you when the fix ships unless you prefer otherwise.
+Use GitHub's private vulnerability reporting: the "Report a vulnerability" button under the repository's [Security tab](https://github.com/PeterM45/sitepass/security/advisories/new). I will acknowledge the report, work with you on a fix, and credit you when the fix ships unless you prefer otherwise.
 
 ## Supported versions
 
