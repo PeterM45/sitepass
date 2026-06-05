@@ -4,12 +4,19 @@ on:
   push:
   pull_request:
 
+# Least privilege: the workflow only reads the repo. Raise per-job if a step ever
+# needs more (e.g. a publish job would add id-token: write).
+permissions:
+  contents: read
+
 jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      # Actions are pinned to commit SHAs (not mutable tags) so a retagged or
+      # compromised release can't silently change what runs in CI.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run check
@@ -17,6 +24,10 @@ jobs:
       # Coverage gate on the library code (excludes the CLI entrypoint). Run on
       # the runner's Node so the v8 provider collects coverage correctly.
       - run: node ./node_modules/.bin/vitest run --coverage
+      # Surface new dependency advisories without failing the build (the published
+      # package ships zero runtime deps, so these only affect the dev toolchain).
+      - run: bun audit
+        continue-on-error: true
 
   test:
     runs-on: ubuntu-latest
@@ -25,9 +36,9 @@ jobs:
       matrix:
         node-version: [20, 22, 24]
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node-version }}
       - run: bun install --frozen-lockfile
