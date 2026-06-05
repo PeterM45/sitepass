@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline/promises'
 import { startProxy } from './proxy'
 
@@ -259,7 +259,16 @@ function upsertEnv(path: string, updates: Record<string, string>) {
     if (index === -1) lines.push(line)
     else lines[index] = line
   }
-  writeFileSync(path, `${lines.join('\n').replace(/\n+$/, '')}\n`)
+  // The file holds SITEPASS_SECRET in plaintext, so keep it owner-only (0600).
+  // `mode` on writeFileSync only applies when the file is created, so chmod the
+  // path explicitly to also tighten a pre-existing, looser env file.
+  writeFileSync(path, `${lines.join('\n').replace(/\n+$/, '')}\n`, { mode: 0o600 })
+  try {
+    chmodSync(path, 0o600)
+  } catch {
+    // Best effort: some filesystems (e.g. Windows, mounted volumes) don't support
+    // POSIX modes. The mode hint above still applies on create where it can.
+  }
 }
 
 function loadDotenv() {
