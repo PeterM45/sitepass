@@ -182,6 +182,12 @@ function htmlHeaders(): Record<string, string> {
 }
 
 function isPublicPath(path: string, publicPaths: string[]): boolean {
+  // The path is matched verbatim, before any percent-decoding. A percent-encoded
+  // slash (%2f) or dot-segment (%2e) can smuggle traversal past a literal prefix
+  // (e.g. "/assets/..%2f..%2fsecret" matches a "/assets/" prefix yet a decoding
+  // origin resolves it elsewhere). Real public asset paths never contain those, so
+  // treat any such path as non-public and let it fall through to the gate.
+  if (/%2[ef]/i.test(path)) return false
   return publicPaths.some((entry) => {
     // Match on whole path segments so "/api/webhooks" covers "/api/webhooks/stripe"
     // but not "/apixyz".

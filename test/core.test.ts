@@ -95,6 +95,17 @@ describe('createGate', () => {
     expect(await pass('/api')).toBe('html')
   })
 
+  it('7b. an encoded slash/dot cannot smuggle traversal past a publicPaths prefix', async () => {
+    const g = gate({ publicPaths: ['/assets'] })
+    const probe = async (path: string) => (await g.handle({ method: 'GET', path })).type
+    // A genuine public asset still passes.
+    expect(await probe('/assets/app.css')).toBe('pass')
+    // A percent-encoded slash (%2f) or dot-segment (%2e) used to bounce out of the
+    // public prefix toward gated content must fall through to the gate, not pass.
+    expect(await probe('/assets/..%2f..%2fsecret')).toBe('html')
+    expect(await probe('/assets/%2e%2e/secret')).toBe('html')
+  })
+
   it('8. open-redirect attempts fall back to "/" while a safe next is preserved', async () => {
     const g = gate()
     expect(asRedirect(await login(g, PASSWORD, '//evil.com')).location).toBe('/')
