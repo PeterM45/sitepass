@@ -10,3 +10,7 @@ coverage
 
 *.log
 .DS_Store
+
+# Internal security audit report — kept local, not published (it details exploit
+# mechanics for issues fixed on main; track findings via releases/advisories).
+SECURITY-AUDIT.md
