@@ -153,6 +153,19 @@ describe('express adapter', () => {
     const pass = await fetch(`${base}/secret`, { headers: { cookie: `gate=${token}` } })
     expect(await pass.text()).toBe('DOWNSTREAM')
   })
+
+  it('rejects an oversized login body with 413 instead of buffering it', async () => {
+    // An unauthenticated POST to the login path must not buffer an unbounded body;
+    // the default cap is 64 KiB, so a ~128 KiB body fails closed with 413.
+    const huge = `password=${'a'.repeat(128 * 1024)}`
+    const res = await fetch(`${base}/__gate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: huge,
+      redirect: 'manual',
+    })
+    expect(res.status).toBe(413)
+  })
 })
 
 describe('bun adapter', () => {
