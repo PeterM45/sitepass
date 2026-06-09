@@ -2,7 +2,6 @@
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022"],
-    "ignoreDeprecations": "6.0",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "types": ["node"],
@@ -10,6 +9,7 @@
     "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
+    "noImplicitReturns": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
