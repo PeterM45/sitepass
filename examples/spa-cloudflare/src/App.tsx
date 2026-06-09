@@ -8,7 +8,7 @@ export function App() {
         password, which is the only place a password check on an SPA can actually be enforced.
       </p>
       <p>
-        Look at <code>functions/_middleware.ts</code>: three lines wire up the gate. There is no
+        Look at <code>functions/_middleware.ts</code>: two lines wire up the gate. There is no
         client-side guard in this app, on purpose.
       </p>
     </main>

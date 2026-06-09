@@ -15,10 +15,12 @@ export const onRequest = gate()
 npm install
 cp .dev.vars.example .dev.vars   # then set SITEPASS_PASSWORD and SITEPASS_SECRET
 npm run build                    # vite build -> dist/
-npm run preview                  # wrangler pages dev dist (serves the gate + the SPA)
+npm run preview                  # wrangler pages dev (serves the gate + the SPA)
 ```
 
-Open the printed URL. You get the login page first. After you enter the password, the SPA loads and stays available for the session. Clear the `gate` cookie to see the gate again.
+Note: `npm run dev` is plain Vite without the Pages Function, so the SPA is served ungated there — use `npm run preview` to exercise the gate.
+
+Open the printed URL. You get the login page first. After you enter the password, the SPA loads and stays available for the session. Visit `/__gate/logout` (or clear the `gate` cookie) to see the gate again.
 
 Generate a secret with `npx sitepass init --target cloudflare` if you want one written for you.
 
