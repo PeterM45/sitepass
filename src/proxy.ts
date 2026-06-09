@@ -1,12 +1,14 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { createGate, type GateOptions, readCookie, sanitizeNext } from './core'
+import { createGate, type Gate, type GateOptions, readCookie, sanitizeNext } from './core'
+import { BodyTooLargeError, readRawBody, readRawBuffer } from './node-body'
 
 /**
  * Standalone reverse proxy that gates requests and, on pass, forwards them to a
  * configured origin and streams the response back. The escape hatch for
- * self-hosted static sites with no edge layer. Driven by `sitepass proxy`.
+ * self-hosted static sites with no edge layer. Driven by `sitepass proxy` and
+ * importable from 'sitepass/proxy' for custom setups.
  *
  * This runs in Node, so unlike the core it may use Node APIs.
  */
@@ -18,9 +20,6 @@ export type ProxyOptions = GateOptions & {
 }
 
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024
-
-// Thrown by the body readers when a request exceeds maxBodyBytes; mapped to 413.
-class BodyTooLargeError extends Error {}
 
 // Headers that are connection-specific and must not be forwarded verbatim.
 const HOP_BY_HOP = new Set([
@@ -70,7 +69,7 @@ export function startProxy({
 async function handle(
   req: IncomingMessage,
   res: ServerResponse,
-  gate: ReturnType<typeof createGate>,
+  gate: Gate,
   origin: URL,
   maxBodyBytes: number,
 ) {
@@ -80,18 +79,20 @@ async function handle(
   const path = queryAt === -1 ? rawUrl : rawUrl.slice(0, queryAt)
   const search = queryAt === -1 ? '' : rawUrl.slice(queryAt)
   const isLoginPost = method.toUpperCase() === 'POST' && path === gate.loginPath
+  const bypass = req.headers['x-sitepass-bypass']
 
   const result = await gate.handle({
     method,
     path,
     search,
     cookie: readCookie(req.headers.cookie, gate.cookieName),
-    body: isLoginPost ? await readBody(req, maxBodyBytes) : undefined,
+    bypassToken: Array.isArray(bypass) ? bypass[0] : bypass,
+    body: isLoginPost ? await readRawBody(req, maxBodyBytes) : undefined,
   })
 
   switch (result.type) {
     case 'pass':
-      return forward(req, res, origin, maxBodyBytes)
+      return forward(req, res, gate, origin, maxBodyBytes)
     case 'redirect':
       res.writeHead(302, { Location: result.location, 'Set-Cookie': result.setCookie })
       res.end()
@@ -106,6 +107,7 @@ async function handle(
 async function forward(
   req: IncomingMessage,
   res: ServerResponse,
+  gate: Gate,
   origin: URL,
   maxBodyBytes: number,
 ) {
@@ -132,12 +134,24 @@ async function forward(
     headers.set(name, Array.isArray(value) ? value.join(', ') : value)
   }
   headers.set('host', target.host)
+  // The gate's own session token must not leak downstream: anything that logs
+  // request headers at the origin would capture a replayable credential.
+  const cookieHeader = stripCookie(req.headers.cookie, gate.cookieName)
+  if (cookieHeader) headers.set('cookie', cookieHeader)
+  else headers.delete('cookie')
+  // Standard forwarded-request metadata, so origin-side logs, rate limiting,
+  // and absolute-URL generation see the real client instead of the proxy.
+  appendForwarded(headers, 'x-forwarded-for', req.socket.remoteAddress)
+  if (!headers.has('x-forwarded-proto')) headers.set('x-forwarded-proto', 'http')
+  if (!headers.has('x-forwarded-host') && req.headers.host) {
+    headers.set('x-forwarded-host', req.headers.host)
+  }
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD'
   const upstream = await fetch(target, {
     method: req.method,
     headers,
-    body: hasBody ? await readBuffer(req, maxBodyBytes) : undefined,
+    body: hasBody ? await readRawBuffer(req, maxBodyBytes) : undefined,
     redirect: 'manual',
     signal: controller.signal,
   })
@@ -176,66 +190,18 @@ async function forward(
   }
 }
 
-function readBody(req: IncomingMessage, limit: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = ''
-    let size = 0
-    let done = false
-    req.setEncoding('utf8')
-    req.on('data', (chunk: string) => {
-      if (done) return
-      size += Buffer.byteLength(chunk)
-      if (size > limit) {
-        // Stop reading (cap the memory) but leave the socket alone so the caller
-        // can still send a 413; pausing applies TCP backpressure to the uploader.
-        done = true
-        req.pause()
-        reject(new BodyTooLargeError())
-        return
-      }
-      data += chunk
-    })
-    req.on('end', () => {
-      if (!done) resolve(data)
-    })
-    req.on('error', (error) => {
-      if (!done) reject(error)
-    })
-  })
+/** Re-serialize a Cookie header without the named cookie; undefined if none remain. */
+function stripCookie(cookieHeader: string | undefined, name: string): string | undefined {
+  if (!cookieHeader) return undefined
+  const kept = cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .filter((part) => part !== '' && part.slice(0, part.indexOf('=')).trim() !== name)
+  return kept.length > 0 ? kept.join('; ') : undefined
 }
 
-function readBuffer(req: IncomingMessage, limit: number): Promise<Uint8Array> {
-  return new Promise((resolve, reject) => {
-    const chunks: Uint8Array[] = []
-    let size = 0
-    let done = false
-    req.on('data', (chunk: Uint8Array) => {
-      if (done) return
-      size += chunk.length
-      if (size > limit) {
-        done = true
-        req.pause()
-        reject(new BodyTooLargeError())
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on('end', () => {
-      if (!done) resolve(concat(chunks))
-    })
-    req.on('error', (error) => {
-      if (!done) reject(error)
-    })
-  })
-}
-
-function concat(chunks: Uint8Array[]): Uint8Array {
-  const total = chunks.reduce((n, c) => n + c.length, 0)
-  const out = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    out.set(chunk, offset)
-    offset += chunk.length
-  }
-  return out
+function appendForwarded(headers: Headers, name: string, value: string | undefined) {
+  if (!value) return
+  const existing = headers.get(name)
+  headers.set(name, existing ? `${existing}, ${value}` : value)
 }
