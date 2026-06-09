@@ -16,6 +16,14 @@ export type ProxyOptions = GateOptions & {
   port: number
   /** Max bytes buffered from a request body before the proxy responds 413. Default: 10 MiB. */
   maxBodyBytes?: number | undefined
+  /**
+   * Pass the immediate peer's X-Forwarded-* through to the origin (appending the
+   * peer to X-Forwarded-For) instead of overwriting them. Only safe when the
+   * proxy is reachable solely through one trusted front hop, e.g. a TLS
+   * terminator — anywhere a client can reach the proxy directly, leave this off
+   * or clients can spoof their IP, scheme, and host to the origin. Default: false.
+   */
+  trustProxy?: boolean | undefined
 }
 
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024
@@ -57,13 +65,14 @@ export function startProxy({
   origin,
   port,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
+  trustProxy = false,
   ...gateOptions
 }: ProxyOptions) {
   const gate = createGate(gateOptions)
   const originUrl = new URL(origin)
 
   const server = createServer((req, res) => {
-    handle(req, res, gate, originUrl, maxBodyBytes).catch((error) => {
+    handle(req, res, gate, originUrl, maxBodyBytes, trustProxy).catch((error) => {
       // If the response is already on its way (or the socket is gone), there is
       // nothing to send — just tear it down. Otherwise translate the failure.
       if (res.headersSent || res.writableEnded || res.destroyed) {
@@ -92,6 +101,7 @@ async function handle(
   gate: Gate,
   origin: URL,
   maxBodyBytes: number,
+  trustProxy: boolean,
 ) {
   const method = req.method ?? 'GET'
   const rawUrl = req.url ?? '/'
@@ -116,7 +126,7 @@ async function handle(
 
   switch (result.type) {
     case 'pass':
-      return forward(req, res, gate, origin, maxBodyBytes)
+      return forward(req, res, gate, origin, maxBodyBytes, trustProxy)
     case 'redirect':
       res.writeHead(302, { Location: result.location, 'Set-Cookie': result.setCookie })
       res.end()
@@ -134,6 +144,7 @@ async function forward(
   gate: Gate,
   origin: URL,
   maxBodyBytes: number,
+  trustProxy: boolean,
 ) {
   // Pin the upstream host to the configured origin and copy only the request's
   // path+query onto it. The host must never come from the request line: a target
@@ -175,12 +186,27 @@ async function forward(
   const cookieHeader = stripCookie(req.headers.cookie, gate.cookieName)
   if (cookieHeader) headers.set('cookie', cookieHeader)
   else headers.delete('cookie')
-  // Forwarded-request metadata, set authoritatively (the inbound values were
-  // dropped above): as the front-most hop, the proxy is the only trustworthy
-  // source, so a client cannot spoof its IP, scheme, or host to the origin.
-  if (req.socket.remoteAddress) headers.set('x-forwarded-for', req.socket.remoteAddress)
-  headers.set('x-forwarded-proto', 'http')
-  if (req.headers.host) headers.set('x-forwarded-host', req.headers.host)
+  // Forwarded-request metadata, set authoritatively by default (the inbound
+  // values were dropped above): as the front-most hop, the proxy is the only
+  // trustworthy source, so a client cannot spoof its IP, scheme, or host to the
+  // origin. Under trustProxy the immediate peer is a trusted front hop (e.g. a
+  // TLS terminator), so its X-Forwarded-* survive — the peer is appended to the
+  // For chain and the real scheme/host reach the origin instead of the
+  // terminator's loopback address and a hardcoded "http".
+  const peer = req.socket.remoteAddress
+  if (trustProxy) {
+    const chain = [headerValue(req.headers['x-forwarded-for']), peer]
+      .filter((part) => part !== undefined && part !== '')
+      .join(', ')
+    if (chain) headers.set('x-forwarded-for', chain)
+    headers.set('x-forwarded-proto', headerValue(req.headers['x-forwarded-proto']) ?? 'http')
+    const forwardedHost = headerValue(req.headers['x-forwarded-host']) ?? req.headers.host
+    if (forwardedHost) headers.set('x-forwarded-host', forwardedHost)
+  } else {
+    if (peer) headers.set('x-forwarded-for', peer)
+    headers.set('x-forwarded-proto', 'http')
+    if (req.headers.host) headers.set('x-forwarded-host', req.headers.host)
+  }
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD'
   const upstream = await fetch(target, {
@@ -238,6 +264,11 @@ function connectionNamed(header: string | null | undefined): Set<string> {
     if (name !== '') named.add(name)
   }
   return named
+}
+
+/** Collapse Node's string | string[] header shape; duplicates join per RFC 9110 5.3. */
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value.join(', ') : value
 }
 
 /** Re-serialize a Cookie header without the named cookie; undefined if none remain. */
