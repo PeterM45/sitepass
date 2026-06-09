@@ -1,13 +1,14 @@
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // Importing the CLI module must NOT execute it: the entrypoint is guarded by
 // an is-main check, which is itself implicitly under test here.
 import {
   ensureGitignored,
   flagEnabled,
   loadDotenv,
+  main,
   parseFlags,
   readEnvValue,
   rejectUnknownFlags,
@@ -63,6 +64,71 @@ describe('parseFlags', () => {
 
   it('still accepts flag values that start with a single dash', () => {
     expect(parseFlags(['--password', '-pw'])).toEqual({ password: '-pw' })
+  })
+})
+
+// Drive the real entrypoint via process.argv, capturing console output and the
+// exit code, so these tests cover the command routing main() does before the
+// helpers (the layer the unit tests below can't reach).
+async function runMain(...args: string[]) {
+  const logs: string[] = []
+  const errors: string[] = []
+  const logSpy = vi.spyOn(console, 'log').mockImplementation((...parts) => {
+    logs.push(parts.join(' '))
+  })
+  const errorSpy = vi.spyOn(console, 'error').mockImplementation((...parts) => {
+    errors.push(parts.join(' '))
+  })
+  const argv = process.argv
+  const exitCode = process.exitCode
+  process.argv = ['node', 'sitepass', ...args]
+  process.exitCode = undefined
+  try {
+    await main()
+    return { logs, errors, exitCode: process.exitCode }
+  } finally {
+    process.argv = argv
+    process.exitCode = exitCode
+    logSpy.mockRestore()
+    errorSpy.mockRestore()
+  }
+}
+
+describe('main', () => {
+  it('prints usage for `sitepass help <topic>` instead of rejecting the positional', async () => {
+    const result = await runMain('help', 'init')
+    expect(result.exitCode).toBeUndefined()
+    expect(result.errors).toEqual([])
+    expect(result.logs.join('\n')).toContain('Usage:')
+  })
+
+  it('lets --version outrank the help command, as on every other command', async () => {
+    const result = await runMain('help', '--version')
+    expect(result.exitCode).toBeUndefined()
+    expect(result.logs).toHaveLength(1)
+    expect(result.logs.join('\n')).not.toContain('Usage:')
+  })
+
+  it('rejects a value flag given without a value instead of using the default', async () => {
+    // A bare --env-file silently loading the implicit .env would drop explicit
+    // user intent, the same failure mode as a typo'd --env-file path.
+    const result = await runMain('proxy', '--origin', 'http://localhost:9', '--env-file')
+    expect(result.exitCode).toBe(1)
+    expect(result.errors.join('\n')).toMatch(/--env-file requires a value/)
+  })
+
+  it('rejects a bare --env-file on init before writing anything', async () => {
+    const dir = tmp()
+    const cwd = process.cwd()
+    process.chdir(dir)
+    try {
+      const result = await runMain('init', '--target', 'next', '--env-file')
+      expect(result.exitCode).toBe(1)
+      expect(result.errors.join('\n')).toMatch(/--env-file requires a value/)
+      expect(readEnvValue(join(dir, '.env'), 'SITEPASS_SECRET')).toBeUndefined()
+    } finally {
+      process.chdir(cwd)
+    }
   })
 })
 
