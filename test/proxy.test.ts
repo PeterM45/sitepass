@@ -271,7 +271,11 @@ describe('reverse proxy forwarding', () => {
 
     const token = await loginCookie(port)
     const res = await fetch(`http://127.0.0.1:${port}/x`, {
-      headers: { cookie: `other=1; gate=${token}; theme=dark`, 'x-custom': 'kept' },
+      headers: {
+        cookie: `other=1; gate=${token}; theme=dark`,
+        'x-custom': 'kept',
+        'x-sitepass-bypass': 'secret-bypass',
+      },
     })
     expect(res.status).toBe(200)
 
@@ -279,6 +283,8 @@ describe('reverse proxy forwarding', () => {
     expect(seen.host).toBe(`127.0.0.1:${origin.port}`)
     // The gate's own session token never reaches the origin; other cookies do.
     expect(seen.cookie).toBe('other=1; theme=dark')
+    // The bypass credential is stripped too — it must not leak to origin logs.
+    expect(seen['x-sitepass-bypass']).toBeUndefined()
     // Ordinary headers pass through; connection-specific ones do not.
     expect(seen['x-custom']).toBe('kept')
     expect(seen['proxy-authorization']).toBeUndefined()
@@ -287,6 +293,35 @@ describe('reverse proxy forwarding', () => {
     expect(seen['x-forwarded-for']).toContain('127.0.0.1')
     expect(seen['x-forwarded-proto']).toBe('http')
     expect(seen['x-forwarded-host']).toBe(`127.0.0.1:${port}`)
+  })
+
+  it('sets X-Forwarded-* authoritatively, ignoring client-spoofed values', async () => {
+    let seen: Record<string, string | string[] | undefined> = {}
+    const origin = await listen((req, res) => {
+      seen = req.headers
+      res.end('OK')
+    })
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+    })
+
+    const token = await loginCookie(port)
+    await fetch(`http://127.0.0.1:${port}/x`, {
+      headers: {
+        cookie: `gate=${token}`,
+        'x-forwarded-for': '9.9.9.9',
+        'x-forwarded-host': 'evil.com',
+        'x-forwarded-proto': 'https',
+      },
+    })
+    // The proxy is the trust boundary: a spoofed XFF must not survive, and host
+    // injection / cache poisoning via x-forwarded-host must not reach the origin.
+    expect(seen['x-forwarded-for']).not.toContain('9.9.9.9')
+    expect(seen['x-forwarded-for']).toContain('127.0.0.1')
+    expect(seen['x-forwarded-host']).toBe(`127.0.0.1:${port}`)
+    expect(seen['x-forwarded-proto']).toBe('http')
   })
 
   it('drops the Cookie header entirely when the gate cookie was the only one', async () => {

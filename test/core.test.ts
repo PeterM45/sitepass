@@ -119,6 +119,15 @@ describe('createGate', () => {
     expect((await slash.handle({ method: 'GET', path: '/assets/../secret' })).type).toBe('html')
   })
 
+  it('7f. encoded backslash, double-encoding, and path-param traversal are rejected too', async () => {
+    const g = gate({ publicPaths: ['/assets'] })
+    const probe = async (path: string) => (await g.handle({ method: 'GET', path })).type
+    expect(await probe('/assets/..%5c..%5csecret')).toBe('html') // encoded backslash
+    expect(await probe('/assets/..%252f..%252fsecret')).toBe('html') // double-encoded slash
+    expect(await probe('/assets/%2e%2e%2fsecret')).toBe('html') // encoded dot+slash
+    expect(await probe('/assets/..;/secret')).toBe('html') // path-parameter segment
+  })
+
   it('7d. a "/" or empty publicPaths entry does not un-gate the whole site', async () => {
     const g = gate({ publicPaths: ['/'] })
     expect((await g.handle({ method: 'GET', path: '/' })).type).toBe('pass')
@@ -167,13 +176,29 @@ describe('createGate', () => {
     expect(res.type).toBe('html')
   })
 
-  it('14. the logout path clears the cookie and works even under a publicPaths prefix', async () => {
+  it('14. the logout path clears the cookie (GET/POST only) and works under a publicPaths prefix', async () => {
     const g = gate({ publicPaths: ['/__gate'] })
     const token = await mintCookie(g)
     const res = asRedirect(await g.handle({ method: 'GET', path: '/__gate/logout', cookie: token }))
     expect(res.location).toBe('/')
     expect(res.setCookie).toContain('Max-Age=0')
     expect(readCookie(res.setCookie, g.cookieName)).toBe('')
+    // POST logs out too (a logout form); other methods do not trigger logout.
+    expect((await g.handle({ method: 'POST', path: '/__gate/logout', cookie: token })).type).toBe(
+      'redirect',
+    )
+    expect((await g.handle({ method: 'DELETE', path: '/__gate/logout', cookie: token })).type).toBe(
+      'pass',
+    )
+  })
+
+  it('21. a NaN or non-positive sessionSeconds falls back to the default instead of a NaN expiry', async () => {
+    const bad = gate({ sessionSeconds: Number.NaN })
+    const res = asRedirect(await login(bad, PASSWORD))
+    expect(res.setCookie).not.toContain('NaN')
+    // The minted cookie must actually validate (no silent login loop).
+    const token = readCookie(res.setCookie, bad.cookieName) ?? ''
+    expect((await bad.handle({ method: 'GET', path: '/x', cookie: token })).type).toBe('pass')
   })
 
   it('15. a matching bypass token passes without a session; a wrong one does not', async () => {

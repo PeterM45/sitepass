@@ -2,19 +2,23 @@ import { createGate, type Gate, type GateOptions } from './core'
 import { envString, gateWebRequest } from './web'
 
 /**
- * The slice of the Pages Functions context this adapter touches. The env
- * fields are typed as optional `unknown` (not an index signature) so any
- * consumer-defined `Env` interface — including ones with KV/D1 bindings —
- * satisfies it when annotating `onRequest` with `PagesFunction<Env>`.
+ * The slice of the Pages Functions context this adapter touches. `env` is typed
+ * as `object` rather than a partial record so any consumer-defined `Env` (an
+ * interface with KV/D1/etc. bindings, sharing no keys with ours) still satisfies
+ * it — a partial record is a TypeScript "weak type" and would reject those,
+ * breaking the `export const onRequest: PagesFunction<Env> = gate()` annotation.
+ * The two env vars are read by name via a cast inside `gate`.
  */
 export interface PagesContext {
   request: Request
-  env: {
-    SITEPASS_PASSWORD?: unknown
-    SITEPASS_SECRET?: unknown
-    SITEPASS_BYPASS_TOKEN?: unknown
-  }
+  env: object
   next: () => Promise<Response>
+}
+
+interface SitepassEnv {
+  SITEPASS_PASSWORD?: unknown
+  SITEPASS_SECRET?: unknown
+  SITEPASS_BYPASS_TOKEN?: unknown
 }
 
 export type CloudflareGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
@@ -39,7 +43,8 @@ export function gate({ maxBodyBytes, ...options }: CloudflareGateOptions = {}) {
   // Bindings only exist at request time, so build the gate on first request and
   // reuse it (and its cached signing key) for the life of the isolate.
   let cached: Gate | undefined
-  const gateFor = (env: PagesContext['env']) => {
+  const gateFor = (rawEnv: object) => {
+    const env = rawEnv as SitepassEnv
     cached ??= createGate({
       ...options,
       password: envString(env.SITEPASS_PASSWORD),

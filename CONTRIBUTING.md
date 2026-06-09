@@ -6,7 +6,7 @@ Thanks for helping out. This is a small, deliberately simple package, and the go
 
 ```sh
 bun install
-bun run build      # tsup: ESM + CJS + .d.ts for every entry
+bun run build      # tsup: ESM + CJS + .d.ts for every package entry (the CLI bin is ESM-only, no declarations)
 bun run test       # vitest
 bun run typecheck  # tsc --noEmit
 bun run check      # biome (lint + format check)
@@ -46,6 +46,6 @@ Every adapter does the same three steps:
 2. **Handle.** `await gate.handle(request)`.
 3. **Translate.** Map the `GateResult`: `pass` continues to the app (`next()` or the wrapped handler), `redirect` becomes a 302 with `Location` and `Set-Cookie`, `html` becomes a response with the given status, body, and headers.
 
-For hosts that speak web `Request`/`Response` this is already written: `src/web.ts` (internal, not a package export) does normalize + translate with a capped login-body read, so those adapters reduce to reading their environment and calling `gateWebRequest(g, request, maxBodyBytes) ?? next()`. The Node-side consumers (Express, the proxy) share the capped body readers in `src/node-body.ts`. New adapters should reuse these instead of re-implementing the plumbing — and add a `describeAdapterConformance` driver in `test/adapters.test.ts`, which buys the full conformance suite (login, cookie pass, body cap, logout, bypass) for ~10 lines.
+For hosts that speak web `Request`/`Response` this is already written: `src/web.ts` (internal, not a package export) does normalize + translate with a capped login-body read, so those adapters reduce to reading their environment and calling `(await gateWebRequest(g, request, maxBodyBytes)) ?? next()` (the `await` matters — a pending Promise is never nullish). The Node-side consumers (Express, the proxy) share the capped body readers in `src/node-body.ts`. New adapters should reuse these instead of re-implementing the plumbing — and add a `describeAdapterConformance` driver in `test/adapters.test.ts`, which buys the full conformance suite (login, cookie pass, body cap, logout, bypass) for ~10 lines.
 
 Each adapter reads `SITEPASS_PASSWORD`, `SITEPASS_SECRET`, and `SITEPASS_BYPASS_TOKEN` from its own environment and passes them into `createGate`. The core never reads environment variables. When adding an adapter, pull the framework's current middleware docs first and match how that framework writes middleware.

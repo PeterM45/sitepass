@@ -4,22 +4,34 @@ import { pipeline } from 'node:stream/promises'
 import { createGate, type Gate, type GateOptions, readCookie, sanitizeNext } from './core'
 import { BodyTooLargeError, readRawBody, readRawBuffer } from './node-body'
 
-/**
- * Standalone reverse proxy that gates requests and, on pass, forwards them to a
- * configured origin and streams the response back. The escape hatch for
- * self-hosted static sites with no edge layer. Driven by `sitepass proxy` and
- * importable from 'sitepass/proxy' for custom setups.
- *
- * This runs in Node, so unlike the core it may use Node APIs.
- */
+// Standalone reverse proxy that gates requests and, on pass, forwards them to a
+// configured origin and streams the response back. The escape hatch for
+// self-hosted static sites with no edge layer. Driven by `sitepass proxy` and
+// importable from 'sitepass/proxy' for custom setups.
+//
+// This runs in Node, so unlike the core it may use Node APIs.
+
 export type ProxyOptions = GateOptions & {
   origin: string
   port: number
   /** Max bytes buffered from a request body before the proxy responds 413. Default: 10 MiB. */
-  maxBodyBytes?: number
+  maxBodyBytes?: number | undefined
 }
 
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024
+
+// The login form body (next + password) is tiny; cap it at 64 KiB regardless of
+// the (larger) forward-body limit so an unauthenticated login POST stays bounded.
+const LOGIN_BODY_LIMIT = 64 * 1024
+
+// Headers the client must not control: the gate's own bypass credential, and the
+// forwarded-request metadata, which a front-most proxy sets authoritatively.
+const CLIENT_CONTROLLED = new Set([
+  'x-sitepass-bypass',
+  'x-forwarded-for',
+  'x-forwarded-proto',
+  'x-forwarded-host',
+])
 
 // Headers that are connection-specific and must not be forwarded verbatim.
 const HOP_BY_HOP = new Set([
@@ -33,6 +45,11 @@ const HOP_BY_HOP = new Set([
   'trailer',
 ])
 
+/**
+ * Start a gating reverse proxy in front of `origin`, listening on `port`.
+ * Accepts every gate option (password, secret, publicPaths, bypassToken, …)
+ * plus `maxBodyBytes`. Returns the Node http.Server so callers can close it.
+ */
 export function startProxy({
   origin,
   port,
@@ -87,7 +104,11 @@ async function handle(
     search,
     cookie: readCookie(req.headers.cookie, gate.cookieName),
     bypassToken: Array.isArray(bypass) ? bypass[0] : bypass,
-    body: isLoginPost ? await readRawBody(req, maxBodyBytes) : undefined,
+    // The login body is tiny; cap it well below the forward limit so an
+    // unauthenticated POST to the login path can't buffer up to maxBodyBytes.
+    body: isLoginPost
+      ? await readRawBody(req, Math.min(maxBodyBytes, LOGIN_BODY_LIMIT))
+      : undefined,
   })
 
   switch (result.type) {
@@ -130,22 +151,24 @@ async function forward(
 
   const headers = new Headers()
   for (const [name, value] of Object.entries(req.headers)) {
-    if (value === undefined || HOP_BY_HOP.has(name)) continue
+    // Drop hop-by-hop headers and any client-controlled header the proxy owns
+    // (the bypass credential and the X-Forwarded-* set, re-derived below).
+    if (value === undefined || HOP_BY_HOP.has(name) || CLIENT_CONTROLLED.has(name)) continue
     headers.set(name, Array.isArray(value) ? value.join(', ') : value)
   }
   headers.set('host', target.host)
   // The gate's own session token must not leak downstream: anything that logs
-  // request headers at the origin would capture a replayable credential.
+  // request headers at the origin would capture a replayable credential. Same
+  // for the bypass token, which CLIENT_CONTROLLED already dropped above.
   const cookieHeader = stripCookie(req.headers.cookie, gate.cookieName)
   if (cookieHeader) headers.set('cookie', cookieHeader)
   else headers.delete('cookie')
-  // Standard forwarded-request metadata, so origin-side logs, rate limiting,
-  // and absolute-URL generation see the real client instead of the proxy.
-  appendForwarded(headers, 'x-forwarded-for', req.socket.remoteAddress)
-  if (!headers.has('x-forwarded-proto')) headers.set('x-forwarded-proto', 'http')
-  if (!headers.has('x-forwarded-host') && req.headers.host) {
-    headers.set('x-forwarded-host', req.headers.host)
-  }
+  // Forwarded-request metadata, set authoritatively (the inbound values were
+  // dropped above): as the front-most hop, the proxy is the only trustworthy
+  // source, so a client cannot spoof its IP, scheme, or host to the origin.
+  if (req.socket.remoteAddress) headers.set('x-forwarded-for', req.socket.remoteAddress)
+  headers.set('x-forwarded-proto', 'http')
+  if (req.headers.host) headers.set('x-forwarded-host', req.headers.host)
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD'
   const upstream = await fetch(target, {
@@ -198,10 +221,4 @@ function stripCookie(cookieHeader: string | undefined, name: string): string | u
     .map((part) => part.trim())
     .filter((part) => part !== '' && part.slice(0, part.indexOf('=')).trim() !== name)
   return kept.length > 0 ? kept.join('; ') : undefined
-}
-
-function appendForwarded(headers: Headers, name: string, value: string | undefined) {
-  if (!value) return
-  const existing = headers.get(name)
-  headers.set(name, existing ? `${existing}, ${value}` : value)
 }
