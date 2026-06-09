@@ -8,6 +8,7 @@ import {
   DEFAULT_MAX_BODY_BYTES,
 } from './web'
 
+/** Options for `gate`: every gate option except the env-sourced credentials, plus `maxBodyBytes`. */
 export type ExpressGateOptions = AdapterGateOptions
 
 /**

@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from 'astro'
 import { type AdapterGateOptions, createGateFromEnv, gateWebRequest } from './web'
 
+/** Options for `gate`: every gate option except the env-sourced credentials, plus `maxBodyBytes`. */
 export type AstroGateOptions = AdapterGateOptions
 
 /**

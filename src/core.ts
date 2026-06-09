@@ -15,6 +15,7 @@ import { renderDefaultLoginPage, renderNotConfiguredPage } from './login-page'
 // `renderLoginPage` implementations import it from the package root.
 export { escapeHtml } from './login-page'
 
+/** Options for `createGate`. Only `password` and `secret` are required. */
 export interface GateOptions {
   /** The shared password visitors type. Empty means unconfigured: the gate fails closed. */
   password: string
@@ -88,7 +89,9 @@ export interface AuthFailure {
   path: string
 }
 
+/** A host request normalized to the fields the gate inspects. Adapters build one per request. */
 export interface GateRequest {
+  /** HTTP method, any case. */
   method: string
   /** Pathname only, e.g. "/pricing". */
   path: string
@@ -102,12 +105,20 @@ export interface GateRequest {
   body?: string | undefined
 }
 
+/**
+ * The gate's decision for one request. `pass`: let it through to the app.
+ * `redirect`: send a 302 to `location` with the `setCookie` value (a login or
+ * logout). `html`: send the page as-is — the login page or the 503
+ * not-configured notice.
+ */
 export type GateResult =
   | { type: 'pass' }
   | { type: 'redirect'; location: string; setCookie: string }
   | { type: 'html'; status: number; body: string; headers: Record<string, string> }
 
+/** The gate built by `createGate`. Adapters call `handle` once per request. */
 export interface Gate {
+  /** Decide pass / redirect / html for one normalized request. */
   handle(request: GateRequest): Promise<GateResult>
   /** Resolved cookie name, for adapters that read the request cookie. */
   readonly cookieName: string
@@ -337,7 +348,7 @@ function isPublicPath(path: string, publicPaths: readonly string[]): boolean {
     if (entry === '') return false
     if (entry === '/') return path === '/'
     // Match on whole path segments so "/api/webhooks" covers "/api/webhooks/stripe"
-    // but not "/apixyz".
+    // but not "/api/webhooksxyz".
     const base = entry.endsWith('/') ? entry.slice(0, -1) : entry
     return path === base || path.startsWith(`${base}/`)
   })
