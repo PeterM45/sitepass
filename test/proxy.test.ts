@@ -239,6 +239,54 @@ describe('reverse proxy forwarding', () => {
     expect(seen['x-forwarded-host']).toBe(`127.0.0.1:${port}`)
   })
 
+  it('drops request headers named by the inbound Connection header', async () => {
+    let seen: Record<string, string | string[] | undefined> = {}
+    const origin = await listen((req, res) => {
+      seen = req.headers
+      res.end('OK')
+    })
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+    })
+    const token = await loginCookie(port)
+
+    // fetch forbids the Connection header, so speak raw HTTP: a request can
+    // declare any header connection-scoped, and the proxy must consume it
+    // (RFC 7230 §6.1) rather than smuggle it past the static hop-by-hop list.
+    const status = await rawRequest(port, 'GET /x HTTP/1.1', [
+      `Host: 127.0.0.1:${port}`,
+      `Cookie: gate=${token}`,
+      'Connection: X-Hop',
+      'X-Hop: leak',
+      'X-Kept: ok',
+    ])
+    expect(status).toContain('200')
+    expect(seen['x-hop']).toBeUndefined()
+    expect(seen['x-kept']).toBe('ok')
+  })
+
+  it('drops response headers named by the upstream Connection header', async () => {
+    const origin = await listen((_req, res) => {
+      res.writeHead(200, { connection: 'x-resp-hop', 'x-resp-hop': 'leak', 'x-kept': 'ok' })
+      res.end('OK')
+    })
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+    })
+
+    const token = await loginCookie(port)
+    const res = await fetch(`http://127.0.0.1:${port}/x`, {
+      headers: { cookie: `gate=${token}` },
+    })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-resp-hop')).toBeNull()
+    expect(res.headers.get('x-kept')).toBe('ok')
+  })
+
   it('sets X-Forwarded-* authoritatively, ignoring client-spoofed values', async () => {
     let seen: Record<string, string | string[] | undefined> = {}
     const origin = await listen((req, res) => {

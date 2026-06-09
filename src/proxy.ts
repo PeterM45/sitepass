@@ -153,10 +153,19 @@ async function forward(
   res.on('close', () => controller.abort())
 
   const headers = new Headers()
+  const connectionScoped = connectionNamed(req.headers.connection)
   for (const [name, value] of Object.entries(req.headers)) {
-    // Drop hop-by-hop headers and any client-controlled header the proxy owns
+    // Drop hop-by-hop headers (the static set plus whatever the inbound
+    // Connection header names) and any client-controlled header the proxy owns
     // (the bypass credential and the X-Forwarded-* set, re-derived below).
-    if (value === undefined || HOP_BY_HOP.has(name) || CLIENT_CONTROLLED.has(name)) continue
+    if (
+      value === undefined ||
+      HOP_BY_HOP.has(name) ||
+      connectionScoped.has(name) ||
+      CLIENT_CONTROLLED.has(name)
+    ) {
+      continue
+    }
     headers.set(name, Array.isArray(value) ? value.join(', ') : value)
   }
   headers.set('host', target.host)
@@ -183,6 +192,7 @@ async function forward(
   })
 
   const outHeaders: Record<string, string | string[]> = {}
+  const upstreamConnectionScoped = connectionNamed(upstream.headers.get('connection'))
   upstream.headers.forEach((value, name) => {
     // Drop content-encoding/length: fetch already decoded the body, so the
     // original values no longer match what we stream out. Skip set-cookie here
@@ -190,6 +200,7 @@ async function forward(
     // so a single string slot would keep only the last one.
     if (
       HOP_BY_HOP.has(name) ||
+      upstreamConnectionScoped.has(name) ||
       name === 'content-encoding' ||
       name === 'content-length' ||
       name === 'set-cookie'
@@ -214,6 +225,19 @@ async function forward(
   } catch {
     res.destroy()
   }
+}
+
+// RFC 7230 §6.1: every header the Connection header names is hop-by-hop for
+// that connection, so an intermediary must drop those too, not just the fixed
+// set — otherwise `Connection: x-foo` smuggles x-foo past the static list.
+function connectionNamed(header: string | null | undefined): Set<string> {
+  const named = new Set<string>()
+  if (!header) return named
+  for (const token of header.split(',')) {
+    const name = token.trim().toLowerCase()
+    if (name !== '') named.add(name)
+  }
+  return named
 }
 
 /** Re-serialize a Cookie header without the named cookie; undefined if none remain. */
