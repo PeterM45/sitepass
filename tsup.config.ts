@@ -39,11 +39,18 @@ export default defineConfig([
     format: ['esm', 'cjs'],
     target: 'es2022',
     platform: 'node',
-    dts: true,
+    // tsup's dts worker injects the TS-6-deprecated baseUrl (rollup-plugin-dts
+    // defaults it to "."), so the deprecation is silenced here — scoped to the
+    // dts build — instead of in tsconfig.json where it would mask real ones.
+    dts: { compilerOptions: { ignoreDeprecations: '6.0' } },
     clean: true,
     splitting: true,
     treeshake: true,
     sourcemap: false,
+    // tsup strips node: prefixes by default; keep them so non-Node resolvers
+    // (bundlers in browser mode, Deno) fail loudly instead of resolving "crypto"
+    // to an npm package.
+    removeNodeProtocol: false,
     external,
   },
   {
@@ -56,6 +63,7 @@ export default defineConfig([
     dts: false,
     clean: false,
     sourcemap: false,
+    removeNodeProtocol: false,
     external,
     define: { __SITEPASS_VERSION__: JSON.stringify(pkg.version) },
   },
