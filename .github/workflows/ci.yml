@@ -21,6 +21,11 @@ jobs:
       - run: bun run typecheck
       - run: bun run check
       - run: bun run build
+      # Execute the built artifact: import every dist entry in both formats and
+      # run the CLI, so a tsup/exports-map regression can't ship green. publint
+      # validates the publish metadata against the same build.
+      - run: node scripts/smoke-dist.mjs
+      - run: bunx publint
       # Coverage gate on the library code (excludes the CLI entrypoint). Run on
       # the runner's Node so the v8 provider collects coverage correctly.
       - run: node ./node_modules/.bin/vitest run --coverage
