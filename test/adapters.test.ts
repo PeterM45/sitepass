@@ -12,6 +12,7 @@ import { gate as netlifyGate } from '../src/netlify'
 import { gate as nextGate } from '../src/next'
 import { gate as svelteGate } from '../src/sveltekit'
 import { PASSWORD, SECRET } from './fixtures/credentials'
+import express4 from './fixtures/express4'
 
 // Every adapter reads SITEPASS_* from the environment when gate() is called, so
 // set them before any adapter is constructed. netlify reads a `Netlify` global.
@@ -155,21 +156,33 @@ afterAll(async () => {
   )
 })
 
-describeAdapterConformance('express', async (options) => {
-  const app = express()
-  app.use(expressGate(options))
-  app.all('/{*path}', (_req, res) => {
-    res.send('DOWNSTREAM')
-  })
+async function listen(app: ReturnType<typeof express>): Promise<string> {
   const server = await new Promise<Server>((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s))
   })
   servers.push(server)
   const address = server.address()
   if (address === null || typeof address === 'string') throw new Error('no port')
-  const base = `http://127.0.0.1:${address.port}`
-  return (path, init) => fetch(`${base}${path}`, { ...init, redirect: 'manual' })
-})
+  return `http://127.0.0.1:${address.port}`
+}
+
+// peerDependencies claim express >=4, so the conformance suite runs both
+// majors (via the express4 npm alias). Only the catch-all route syntax
+// differs: Express 5 needs '/{*path}', Express 4 needs '*'.
+for (const [name, createApp, allPath] of [
+  ['express', express, '/{*path}'],
+  ['express@4', express4, '*'],
+] as const) {
+  describeAdapterConformance(name, async (options) => {
+    const app = createApp()
+    app.use(expressGate(options))
+    app.all(allPath, (_req, res) => {
+      res.send('DOWNSTREAM')
+    })
+    const base = await listen(app)
+    return (path, init) => fetch(`${base}${path}`, { ...init, redirect: 'manual' })
+  })
+}
 
 describeAdapterConformance('bun', (options) => {
   const handle = bunGate(DOWNSTREAM, options)
