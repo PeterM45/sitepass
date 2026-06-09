@@ -18,10 +18,18 @@ import { BYPASS_HEADER, DEFAULT_MAX_BODY_BYTES as LOGIN_BODY_LIMIT } from './web
 //
 // This runs in Node, so unlike the core it may use Node APIs.
 
+/** Options for `startProxy`: every gate option plus the proxy-specific fields. */
 export type ProxyOptions = GateOptions & {
+  /** Base URL of the upstream to forward passed requests to, e.g. "http://localhost:8080". */
   origin: string
+  /** Port the proxy listens on. 0 asks the OS for a free port. */
   port: number
-  /** Max bytes buffered from a request body before the proxy responds 413. Default: 10 MiB. */
+  /**
+   * Max bytes buffered from a forwarded request body before the proxy responds
+   * 413. Default: 10 MiB. The login POST body is capped separately, at
+   * min(maxBodyBytes, 64 KiB) — unlike the adapters, where maxBodyBytes is that
+   * login cap.
+   */
   maxBodyBytes?: number | undefined
   /**
    * Pass the immediate peer's X-Forwarded-* through to the origin (appending the

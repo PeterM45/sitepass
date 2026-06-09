@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { type AdapterGateOptions, createGateFromEnv, gateWebRequest } from './web'
 
+/** Options for `gate`: every gate option except the env-sourced credentials, plus `maxBodyBytes`. */
 export type NextGateOptions = AdapterGateOptions
 
 /**

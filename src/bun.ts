@@ -10,6 +10,7 @@ export type FetchHandler<A extends unknown[] = unknown[]> = (
   ...args: A
 ) => Response | Promise<Response>
 
+/** Options for `gate`: every gate option except the env-sourced credentials, plus `maxBodyBytes`. */
 export type BunGateOptions = AdapterGateOptions
 
 /**

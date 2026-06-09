@@ -2,6 +2,7 @@ import type { Handle } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { type AdapterGateOptions, createGateFromEnv, gateWebRequest } from './web'
 
+/** Options for `gate`: every gate option except the env-sourced credentials, plus `maxBodyBytes`. */
 export type SvelteKitGateOptions = AdapterGateOptions
 
 /**

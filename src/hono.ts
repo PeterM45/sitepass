@@ -2,6 +2,7 @@ import type { Context, MiddlewareHandler } from 'hono'
 import type { Gate } from './core'
 import { type AdapterGateOptions, createGateFromEnv, envString, gateWebRequest } from './web'
 
+/** Options for `gate`: every gate option except the env-sourced credentials, plus `maxBodyBytes`. */
 export type HonoGateOptions = AdapterGateOptions
 
 /**

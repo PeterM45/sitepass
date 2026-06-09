@@ -9,6 +9,7 @@ export interface NetlifyContext {
   next: () => Promise<Response>
 }
 
+/** Options for `gate`: every gate option except the env-sourced credentials, plus `maxBodyBytes`. */
 export type NetlifyGateOptions = AdapterGateOptions
 
 /**
@@ -37,8 +38,9 @@ function netlifyEnv(name: string): string {
   return typeof Netlify === 'undefined' ? '' : (Netlify.env.get(name) ?? '')
 }
 
-// Run on every path. Re-export this from your edge function file. Annotated so
-// the leading-slash literal survives into the published types: Netlify's own
-// Config types `path` as a `/${string}` template, and a plain `string` would
-// fail an `export const config: Config = …` annotation in a consumer project.
+// Annotated so the leading-slash literal survives into the published types:
+// Netlify's own Config types `path` as a `/${string}` template, and a plain
+// `string` would fail an `export const config: Config = …` annotation in a
+// consumer project.
+/** Routes the edge function to every path. Re-export this from your edge function file. */
 export const config: { path: `/${string}` } = { path: '/*' }
