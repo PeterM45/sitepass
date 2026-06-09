@@ -295,6 +295,35 @@ describe('createGate', () => {
     expect(res.body).toContain('--accent: #4f46e5')
   })
 
+  it('22. the failed-login page ties the error to the input for assistive tech', async () => {
+    // role="alert" is inert on a server-rendered page (it only announces on
+    // dynamic insertion), so the aria-describedby association from the focused
+    // input is what makes the error discoverable to screen-reader users.
+    const res = asHtml(await login(gate(), 'nope'))
+    expect(res.body).toContain('id="sitepass-error"')
+    expect(res.body).toContain('aria-invalid="true"')
+    expect(res.body).toContain('aria-describedby="sitepass-error"')
+    // The clean login page must not claim the field is invalid.
+    const clean = asHtml(await gate().handle({ method: 'GET', path: '/secret' }))
+    expect(clean.body).not.toContain('aria-invalid')
+    expect(clean.body).not.toContain('sitepass-error')
+  })
+
+  it('23. the default page declares its color schemes and AA-compliant colors', async () => {
+    const res = asHtml(await gate().handle({ method: 'GET', path: '/secret' }))
+    // Without color-scheme the UA keeps its own surfaces (canvas, form-control
+    // internals, scrollbars) light for dark-mode users despite the dark theme.
+    expect(res.body).toContain('<meta name="color-scheme" content="light dark" />')
+    expect(res.body).toContain('color-scheme: light dark')
+    // Input border: 4.83:1 on the light card, 3.67:1 on the dark card (≥3:1,
+    // WCAG 1.4.11). Dark error text: 6.40:1 on the dark card (≥4.5:1, AA).
+    expect(res.body).toContain('border: 1px solid #71717a')
+    expect(res.body).toContain('.error { color: #f87171; }')
+    // dvh keeps the card centered under mobile dynamic toolbars; the vh
+    // declaration before it is the fallback where dvh is unsupported.
+    expect(res.body).toContain('min-height: 100vh; min-height: 100dvh;')
+  })
+
   it('12. a valid brand accent is preserved', async () => {
     const hex = gate({ brand: { accent: '#0af' } })
     expect(asHtml(await hex.handle({ method: 'GET', path: '/' })).body).toContain('--accent: #0af')

@@ -473,15 +473,20 @@ function renderDefaultLoginPage(
   next: string,
   error: boolean,
 ): string {
+  // role="alert" alone is not announced on a server-rendered page (it fires
+  // only on dynamic insertion), and autofocus drops a screen-reader user
+  // straight into the empty field; the aria-describedby/aria-invalid pair on
+  // the input is what actually surfaces the failure.
   const errorNotice = error
-    ? '<p class="error" role="alert">Incorrect password. Try again.</p>'
+    ? '<p id="sitepass-error" class="error" role="alert">Incorrect password. Try again.</p>'
     : ''
+  const errorAttrs = error ? ' aria-invalid="true" aria-describedby="sitepass-error"' : ''
   const inner = `<h1>${escapeHtml(brand.title)}</h1>
       <p class="subtitle">${escapeHtml(brand.subtitle)}</p>
       <form method="post" action="${escapeHtml(loginPath)}">
         <input type="hidden" name="next" value="${escapeHtml(next)}" />
         <label for="sitepass-password">Password</label>
-        <input id="sitepass-password" name="password" type="password" autocomplete="current-password" autofocus required />
+        <input id="sitepass-password" name="password" type="password" autocomplete="current-password" autofocus required${errorAttrs} />
         ${errorNotice}
         <button type="submit">Continue</button>
       </form>`
@@ -500,6 +505,7 @@ function documentShell(title: string, accent: string, inner: string): string {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="robots" content="noindex, nofollow" />
     <title>${escapeHtml(title)}</title>
     <style>${pageStyles(accent)}</style>
@@ -512,12 +518,18 @@ function documentShell(title: string, accent: string, inner: string): string {
 </html>`
 }
 
+// Color constraints (WCAG 2.1): error text ≥4.5:1 on its card in both schemes
+// (#dc2626 on #fff = 4.83:1, #f87171 on #18181b = 6.40:1) and the input border
+// ≥3:1 non-text contrast (#71717a = 4.83:1 light, 3.67:1 dark). color-scheme
+// keeps UA-rendered surfaces (canvas, form-control internals, scrollbars) in
+// step with the dark theme; 100dvh tracks mobile dynamic toolbars, with the
+// 100vh declaration before it as the fallback where dvh is unsupported.
 function pageStyles(accent: string): string {
   return `
-    :root { --accent: ${accent}; }
+    :root { --accent: ${accent}; color-scheme: light dark; }
     * { box-sizing: border-box; }
     body {
-      margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 1.5rem;
+      margin: 0; min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 1.5rem;
       font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
       color: #18181b; background: #f4f4f5;
     }
@@ -530,7 +542,7 @@ function pageStyles(accent: string): string {
     label { display: block; font-size: .85rem; font-weight: 600; margin-bottom: .4rem; }
     input[type=password] {
       width: 100%; padding: .7rem .8rem; font-size: 1rem; color: inherit; background: #fff;
-      border: 1px solid #d4d4d8; border-radius: 8px;
+      border: 1px solid #71717a; border-radius: 8px;
     }
     input[type=password]:focus {
       outline: none; border-color: var(--accent);
@@ -546,6 +558,7 @@ function pageStyles(accent: string): string {
       body { color: #e4e4e7; background: #09090b; }
       .card { background: #18181b; box-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.5); }
       .subtitle { color: #a1a1aa; }
-      input[type=password] { color: #e4e4e7; background: #27272a; border-color: #3f3f46; }
+      input[type=password] { color: #e4e4e7; background: #27272a; }
+      .error { color: #f87171; }
     }`
 }
