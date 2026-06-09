@@ -100,6 +100,14 @@ async function runInit(flags: Flags) {
   const existingPassword = readEnvValue(envPath, 'SITEPASS_PASSWORD')
   const secret = existingSecret || generateSecret()
 
+  // The gate treats secrets under 16 chars as unconfigured (fail closed). A kept
+  // short secret would silently 503 the whole site, so warn rather than hide it.
+  if (existingSecret && existingSecret.length < 16) {
+    console.warn(
+      `Warning: the existing SITEPASS_SECRET is only ${existingSecret.length} characters; the gate needs at least 16 and will fail closed (503) until you set a longer one.`,
+    )
+  }
+
   let password = existingPassword || asString(flags.password) || ''
   if (!password && isInteractive()) {
     password = await prompt('Shared password (leave blank to set later): ')
@@ -162,6 +170,16 @@ function runProxy(flags: Flags) {
   }
 
   const sessionSecondsFlag = asString(flags['session-seconds'])
+  let sessionSeconds: number | undefined
+  if (sessionSecondsFlag !== undefined) {
+    sessionSeconds = Number(sessionSecondsFlag)
+    if (!Number.isInteger(sessionSeconds) || sessionSeconds <= 0) {
+      throw new Error(
+        `Invalid --session-seconds "${sessionSecondsFlag}": expected a positive integer.`,
+      )
+    }
+  }
+
   startProxy({
     origin,
     port,
@@ -173,11 +191,11 @@ function runProxy(flags: Flags) {
       .filter((entry) => entry !== ''),
     loginPath: asString(flags['login-path']),
     cookieName: asString(flags['cookie-name']),
-    sessionSeconds: sessionSecondsFlag === undefined ? undefined : Number(sessionSecondsFlag),
+    sessionSeconds,
     bypassToken: asString(flags['bypass-token']) ?? process.env.SITEPASS_BYPASS_TOKEN,
     // --insecure-cookie drops the Secure attribute for plain-HTTP (LAN) use;
     // without it, browsers reject the cookie and login silently loops.
-    cookieSecure: flags['insecure-cookie'] === true ? false : undefined,
+    cookieSecure: flagEnabled(flags['insecure-cookie']) ? false : undefined,
   })
   console.log(`sitepass proxy listening on http://localhost:${port} -> ${origin}`)
 }
@@ -320,6 +338,14 @@ export function rejectUnknownFlags(command: string, flags: Flags) {
 
 function asString(value: string | boolean | undefined): string | undefined {
   return typeof value === 'string' ? value : undefined
+}
+
+// A boolean flag is enabled by its bare form (--insecure-cookie) or an explicit
+// truthy value (--insecure-cookie=true); an explicit =false disables it.
+export function flagEnabled(value: string | boolean | undefined): boolean {
+  if (value === true) return true
+  if (typeof value === 'string') return value === '' || value === 'true' || value === '1'
+  return false
 }
 
 function isTarget(value: string): value is Target {

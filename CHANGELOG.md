@@ -6,6 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Because of the two behavior changes below, this should ship as **0.2.0**, not a
+0.1.x patch — `^0.1` consumers should not pick it up automatically.
+
 Heads-up for upgraders, two deliberate behavior changes:
 
 - **Existing sessions are invalidated once on upgrade.** Tokens now bind a
@@ -32,12 +35,15 @@ Heads-up for upgraders, two deliberate behavior changes:
   sessions (previously only rotating the secret did, and nothing documented
   that).
 - **All adapters:** the login `POST` body is read with a 64 KiB cap and fails
-  closed with `413` on every adapter. Previously only Express was capped; Bun
-  and Hono — self-hosted runtimes with no platform limit — buffered without
-  bound.
-- **Reverse proxy:** the gate's own session cookie is stripped before
-  forwarding, so origin-side logs can no longer capture a replayable
-  credential. Other cookies forward unchanged.
+  closed with `413` on every adapter (the reverse proxy caps its login body at
+  64 KiB too, separately from its larger forward-body limit). Previously only
+  Express was capped; Bun and Hono — self-hosted runtimes with no platform
+  limit — buffered without bound.
+- **Reverse proxy:** the gate's own session cookie and the `x-sitepass-bypass`
+  credential are stripped before forwarding, so origin-side logs can no longer
+  capture a replayable credential. Other cookies forward unchanged. The
+  `X-Forwarded-For`/`-Proto`/`-Host` headers are set authoritatively from the
+  proxy-observed connection, so a client cannot spoof them to the origin.
 
 ### Fixed
 
@@ -83,16 +89,20 @@ Heads-up for upgraders, two deliberate behavior changes:
 - **`sitepass/proxy` export:** `startProxy(options)` is now importable for
   programmatic use; it accepts every gate option. (The files already shipped
   in the tarball but were unreachable.)
-- **Reverse proxy:** sends `X-Forwarded-For`/`-Proto`/`-Host` to the origin;
-  the CLI exposes gate options as flags (`--public-paths`, `--login-path`,
-  `--cookie-name`, `--session-seconds`, `--bypass-token`, `--env-file`).
+- **Reverse proxy:** sends authoritative `X-Forwarded-For`/`-Proto`/`-Host` to
+  the origin; the CLI exposes gate options as flags (`--public-paths`,
+  `--login-path`, `--cookie-name`, `--session-seconds`, `--bypass-token`,
+  `--env-file`), with `--session-seconds` validated like `--port`.
 - **CLI:** `--version`/`-v`, and `--env-file` for monorepos.
 - `"sideEffects": false` for better tree-shaking, and `CHANGELOG.md` now ships
   in the npm tarball.
 - **Types:** every adapter exports its options type (`CloudflareGateOptions`,
   …) and context interface; `publicPaths` accepts `readonly string[]`; the
   declarations are precise under `exactOptionalPropertyTypes`;
-  `@types/express` is declared as an optional peer dependency.
+  `@types/express` is declared as an optional peer dependency; a
+  `typesVersions` map resolves subpath types under legacy node10 module
+  resolution (TypeScript consumers on `moduleResolution: node` previously got
+  no types for `sitepass/cloudflare` et al).
 - **CI:** every built `dist` entry is now imported in both formats (plus a CLI
   run and `publint`) before merge and before publish; the publish workflow
   refuses a tag that does not match `package.json`'s version; Dependabot keeps

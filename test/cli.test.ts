@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 // an is-main check, which is itself implicitly under test here.
 import {
   ensureGitignored,
+  flagEnabled,
   loadDotenv,
   parseFlags,
   readEnvValue,
@@ -32,6 +33,21 @@ describe('parseFlags', () => {
 
   it('ignores stray positional tokens', () => {
     expect(parseFlags(['stray', '--port', '8080'])).toEqual({ port: '8080' })
+  })
+})
+
+describe('flagEnabled', () => {
+  it('treats the bare flag and explicit truthy values as enabled', () => {
+    expect(flagEnabled(true)).toBe(true)
+    expect(flagEnabled('')).toBe(true)
+    expect(flagEnabled('true')).toBe(true)
+    expect(flagEnabled('1')).toBe(true)
+  })
+
+  it('treats an explicit false / absent / other strings as disabled', () => {
+    expect(flagEnabled('false')).toBe(false)
+    expect(flagEnabled(undefined)).toBe(false)
+    expect(flagEnabled('no')).toBe(false)
   })
 })
 

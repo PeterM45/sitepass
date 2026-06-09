@@ -1,15 +1,13 @@
-/**
- * sitepass core: a framework-agnostic password gate.
- *
- * `createGate` returns a `handle(request)` that decides whether a request may
- * pass, must be redirected (after a successful login), or should receive an
- * HTML response (the login page or a misconfiguration notice). It never writes
- * a response itself — adapters translate the result into their host's types,
- * which is what keeps this file runnable unchanged on every modern runtime.
- *
- * Only Web Crypto and other platform globals are used here: no Node-only
- * imports, no byte buffers, no framework imports.
- */
+// sitepass core: a framework-agnostic password gate.
+//
+// createGate returns a handle(request) that decides whether a request may pass,
+// must be redirected (after a successful login), or should receive an HTML
+// response (the login page or a misconfiguration notice). It never writes a
+// response itself — adapters translate the result into their host's types,
+// which is what keeps this file runnable unchanged on every modern runtime.
+//
+// Only Web Crypto and other platform globals are used here: no Node-only
+// imports, no byte buffers, no framework imports.
 
 export interface GateOptions {
   /** The shared password visitors type. Empty means unconfigured: the gate fails closed. */
@@ -111,9 +109,20 @@ const DEFAULT_BRAND = {
   accent: '#4f46e5',
 }
 
+/**
+ * Build a password gate. Pass `password` and `secret` (from the environment,
+ * never hardcoded) plus any options; the returned gate's `handle(request)`
+ * decides pass / redirect / html for each request. Used directly only when
+ * writing a custom adapter — the shipped adapters call this for you.
+ */
 export function createGate(options: GateOptions): Gate {
   const cookieName = options.cookieName ?? 'gate'
-  const sessionSeconds = options.sessionSeconds ?? 7 * DAY_SECONDS
+  // Guard against a non-finite session length: NaN or Infinity would mint a
+  // token whose expiry stringifies to "NaN"/"Infinity" and never validates — a
+  // silent login loop. A finite negative just yields an already-expired token,
+  // which verifyToken handles correctly; the CLI separately rejects non-positive.
+  const requestedSeconds = options.sessionSeconds ?? 7 * DAY_SECONDS
+  const sessionSeconds = Number.isFinite(requestedSeconds) ? requestedSeconds : 7 * DAY_SECONDS
   const loginPath = options.loginPath ?? '/__gate'
   const logoutPath = `${loginPath}/logout`
   const publicPaths = options.publicPaths ?? []
@@ -158,7 +167,11 @@ export function createGate(options: GateOptions): Gate {
       return handleLogin(request)
     }
 
-    if (request.path === logoutPath) {
+    // GET (a logout link) or POST (a logout form). Restricting the method keeps
+    // logout from shadowing an unrelated consumer route on other verbs, and
+    // narrows the forced-logout surface (SameSite=Lax already blocks the
+    // cross-site subresource case).
+    if (request.path === logoutPath && ['GET', 'POST'].includes(request.method.toUpperCase())) {
       return { type: 'redirect', location: '/', setCookie: sessionCookie('', 0) }
     }
 
@@ -276,17 +289,21 @@ function htmlHeaders(): Record<string, string> {
 
 function isPublicPath(path: string, publicPaths: readonly string[]): boolean {
   // The path is matched verbatim, before any percent-decoding. A percent-encoded
-  // slash (%2f) or dot-segment (%2e) can smuggle traversal past a literal prefix
-  // (e.g. "/assets/..%2f..%2fsecret" matches a "/assets/" prefix yet a decoding
-  // origin resolves it elsewhere). Real public asset paths never contain those, so
-  // treat any such path as non-public and let it fall through to the gate.
-  if (/%2[ef]/i.test(path)) return false
-  // Same idea for literal dot-segments and backslashes: the edge adapters hand
-  // over a URL-normalized pathname, but the reverse proxy and Express pass the
-  // raw request target, where "/assets/../secret" matches an "/assets" prefix
-  // verbatim yet resolves elsewhere at the origin.
+  // separator can smuggle traversal past a literal prefix (e.g.
+  // "/assets/..%2f..%2fsecret" matches a "/assets/" prefix yet a decoding origin
+  // resolves it elsewhere). Reject any encoded dot (%2e), slash (%2f), backslash
+  // (%5c), or a stray percent (%25 and friends, which a double-decoding origin
+  // could unwrap into one of the above). Real public asset paths contain none of
+  // these, so treat such a path as non-public and let it fall through to the gate.
+  if (/%(2[ef]|5c|25)/i.test(path)) return false
+  // Same idea for literal dot-segments, backslashes, and path-parameter (";")
+  // segments: the edge adapters hand over a URL-normalized pathname, but the
+  // reverse proxy and Express pass the raw request target, where "/assets/../secret"
+  // matches an "/assets" prefix verbatim yet resolves elsewhere at the origin.
   for (const segment of path.split('/')) {
-    if (segment === '.' || segment === '..' || segment.includes('\\')) return false
+    if (segment === '.' || segment === '..' || segment.includes('\\') || segment.includes(';')) {
+      return false
+    }
   }
   return publicPaths.some((entry) => {
     // "/" must stay an exact match on the root: stripping its trailing slash

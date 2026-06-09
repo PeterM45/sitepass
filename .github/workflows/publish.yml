@@ -41,6 +41,7 @@ jobs:
       # Build and execute the exact artifact that ships before publishing it.
       - run: bun run build
       - run: node scripts/smoke-dist.mjs
+      - run: bunx publint
       # npm (not bun) publishes with provenance; prepack runs tsup to build dist.
       - run: npm publish --provenance --access public
         env:
