@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsup'
+import pkg from './package.json'
 
 // Keep every framework/host import out of the bundle so a consumer who installs
 // sitepass for one target never pulls another's runtime. `astro:middleware` and
@@ -56,5 +57,6 @@ export default defineConfig([
     clean: false,
     sourcemap: false,
     external,
+    define: { __SITEPASS_VERSION__: JSON.stringify(pkg.version) },
   },
 ])

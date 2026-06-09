@@ -4,7 +4,7 @@ import { envString, gateWebRequest } from './web'
 
 export type HonoGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
   /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number
+  maxBodyBytes?: number | undefined
 }
 
 /**
@@ -26,6 +26,7 @@ export function gate({ maxBodyBytes, ...options }: HonoGateOptions = {}): Middle
       ...options,
       password: readEnv(c, 'SITEPASS_PASSWORD'),
       secret: readEnv(c, 'SITEPASS_SECRET'),
+      bypassToken: options.bypassToken ?? (readEnv(c, 'SITEPASS_BYPASS_TOKEN') || undefined),
     })
     return cached
   }

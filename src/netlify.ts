@@ -12,7 +12,7 @@ export interface NetlifyContext {
 
 export type NetlifyGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
   /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number
+  maxBodyBytes?: number | undefined
 }
 
 /**
@@ -32,6 +32,7 @@ export function gate({ maxBodyBytes, ...options }: NetlifyGateOptions = {}) {
     ...options,
     password: netlifyEnv('SITEPASS_PASSWORD'),
     secret: netlifyEnv('SITEPASS_SECRET'),
+    bypassToken: options.bypassToken ?? (netlifyEnv('SITEPASS_BYPASS_TOKEN') || undefined),
   })
 
   return async (request: Request, context: NetlifyContext): Promise<Response> =>
