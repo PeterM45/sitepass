@@ -99,6 +99,20 @@ sitepass proxy --origin http://localhost:8080 --port 8788
 
 It reads `SITEPASS_PASSWORD` and `SITEPASS_SECRET` from the environment (and `.env` if present), gates each request, and streams the origin response back on success.
 
+The proxy is also importable for custom setups, and accepts every gate option from the Configuration section:
+
+```ts
+import { startProxy } from 'sitepass/proxy'
+
+startProxy({
+  origin: 'http://localhost:8080',
+  port: 8788,
+  password: process.env.SITEPASS_PASSWORD ?? '',
+  secret: process.env.SITEPASS_SECRET ?? '',
+  publicPaths: ['/health'],
+})
+```
+
 ## Configuration
 
 Pass options to any adapter's `gate()`:

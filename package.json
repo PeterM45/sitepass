@@ -33,8 +33,10 @@
     "sitepass": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
+  "sideEffects": false,
   "main": "./dist/core.cjs",
   "module": "./dist/core.js",
   "types": "./dist/core.d.ts",
@@ -127,6 +129,16 @@
       "require": {
         "types": "./dist/bun.d.cts",
         "default": "./dist/bun.cjs"
+      }
+    },
+    "./proxy": {
+      "import": {
+        "types": "./dist/proxy.d.ts",
+        "default": "./dist/proxy.js"
+      },
+      "require": {
+        "types": "./dist/proxy.d.cts",
+        "default": "./dist/proxy.cjs"
       }
     },
     "./package.json": "./package.json"
