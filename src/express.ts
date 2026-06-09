@@ -43,40 +43,48 @@ export function gate({
     const search = queryAt === -1 ? '' : req.originalUrl.slice(queryAt)
     const isLoginPost = req.method.toUpperCase() === 'POST' && path === g.loginPath
 
-    let body: string | undefined
-    if (isLoginPost) {
-      try {
-        body = await readRawBody(req, maxBodyBytes)
-      } catch (error) {
-        // Fail closed on an oversized login body: never fall through to the gate
-        // (or the app) with a partially read stream.
-        if (error instanceof BodyTooLargeError) {
-          res.status(413).type('text/plain').send('Payload too large')
-          return
+    // This promise must never reject: Express 4 does not route a rejected
+    // middleware promise to error handlers, so a rethrow (e.g. a client
+    // dropping the socket mid-login-body) would crash the process as an
+    // unhandled rejection. Every failure goes to next(error) instead.
+    try {
+      let body: string | undefined
+      if (isLoginPost) {
+        try {
+          body = await readRawBody(req, maxBodyBytes)
+        } catch (error) {
+          // Fail closed on an oversized login body: never fall through to the gate
+          // (or the app) with a partially read stream.
+          if (error instanceof BodyTooLargeError) {
+            res.status(413).type('text/plain').send('Payload too large')
+            return
+          }
+          throw error
         }
-        throw error
       }
-    }
 
-    const result = await g.handle({
-      method: req.method,
-      path,
-      search,
-      cookie: readCookie(req.headers.cookie, g.cookieName),
-      bypassToken: headerValue(req.headers['x-sitepass-bypass']),
-      body,
-    })
+      const result = await g.handle({
+        method: req.method,
+        path,
+        search,
+        cookie: readCookie(req.headers.cookie, g.cookieName),
+        bypassToken: headerValue(req.headers['x-sitepass-bypass']),
+        body,
+      })
 
-    switch (result.type) {
-      case 'pass':
-        next()
-        return
-      case 'redirect':
-        res.status(302).set('Location', result.location).set('Set-Cookie', result.setCookie).end()
-        return
-      case 'html':
-        res.status(result.status).set(result.headers).send(result.body)
-        return
+      switch (result.type) {
+        case 'pass':
+          next()
+          return
+        case 'redirect':
+          res.status(302).set('Location', result.location).set('Set-Cookie', result.setCookie).end()
+          return
+        case 'html':
+          res.status(result.status).set(result.headers).send(result.body)
+          return
+      }
+    } catch (error) {
+      next(error)
     }
   }
 }

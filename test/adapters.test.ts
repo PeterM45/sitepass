@@ -1,5 +1,6 @@
 import type { Server } from 'node:http'
-import express from 'express'
+import { connect } from 'node:net'
+import express, { type ErrorRequestHandler } from 'express'
 import { Hono } from 'hono'
 import { NextRequest } from 'next/server'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -181,6 +182,65 @@ for (const [name, createApp, allPath] of [
     })
     const base = await listen(app)
     return (path, init) => fetch(`${base}${path}`, { ...init, redirect: 'manual' })
+  })
+
+  // Express 4 does not route a rejected middleware promise to error handlers:
+  // the rejection becomes an unhandled rejection and Node kills the process.
+  // So the adapter must never reject — failures (here: a client dropping the
+  // socket mid-login-body) have to reach next(error) instead.
+  describe(`${name} adapter error contract`, () => {
+    it('routes an aborted login POST to next(error) without rejecting', async () => {
+      const middleware = expressGate()
+      const app = createApp()
+
+      let sawRequest = () => {}
+      const requestSeen = new Promise<void>((resolve) => {
+        sawRequest = resolve
+      })
+      let report = (_outcome: { via: string; error: unknown }) => {}
+      const settled = new Promise<{ via: string; error: unknown }>((resolve) => {
+        report = resolve
+      })
+
+      app.use((req, res, next) => {
+        sawRequest()
+        // Observe the adapter's own promise: Express 5 masks a rejection by
+        // routing it to error handlers itself, so asserting on next(error)
+        // alone would not prove the Express-4-safe contract.
+        void Promise.resolve(middleware(req, res, next)).catch((error) =>
+          report({ via: 'rejection', error }),
+        )
+      })
+      const onError: ErrorRequestHandler = (error, _req, res, _next) => {
+        report({ via: 'next', error })
+        res.status(500).end()
+      }
+      app.use(onError)
+
+      const base = await listen(app)
+      const { port } = new URL(base)
+
+      // Raw socket login POST that promises 64 bytes, delivers a few, then drops.
+      const socket = connect(Number(port), '127.0.0.1')
+      socket.write(
+        'POST /__gate HTTP/1.1\r\n' +
+          'Host: 127.0.0.1\r\n' +
+          'Content-Type: application/x-www-form-urlencoded\r\n' +
+          'Content-Length: 64\r\n' +
+          '\r\n' +
+          'password=partial',
+      )
+      await requestSeen
+      socket.destroy()
+
+      const outcome = await settled
+      expect(outcome.via).toBe('next')
+      expect(outcome.error).toBeInstanceOf(Error)
+
+      // The server survived the abort and still gates the next request.
+      const res = await fetch(`${base}/secret`)
+      expect(res.status).toBe(401)
+    })
   })
 }
 
