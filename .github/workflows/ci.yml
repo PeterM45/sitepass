@@ -40,9 +40,12 @@ jobs:
       - run: bun run build
       # Execute the built artifact: import every dist entry in both formats and
       # run the CLI, so a tsup/exports-map regression can't ship green. publint
-      # validates the publish metadata against the same build.
+      # validates the publish metadata against the same build, and attw checks
+      # that types resolve under every consumer resolution mode. Both run the
+      # lockfile-pinned local install, never a floating bunx download.
       - run: node scripts/smoke-dist.mjs
-      - run: bunx publint
+      - run: bun run publint
+      - run: bun run attw
       # Coverage gate on the library code (excludes the CLI entrypoint). Run on
       # the runner's Node so the v8 provider collects coverage correctly.
       - run: node ./node_modules/.bin/vitest run --coverage
