@@ -12,5 +12,7 @@ interface ImportMetaEnv {
 }
 
 interface ImportMeta {
-  readonly env: ImportMetaEnv
+  // Optional: import.meta.env only exists inside a Vite build, which is exactly
+  // why src/astro.ts guards every access — the type must force that guard.
+  readonly env?: ImportMetaEnv
 }
