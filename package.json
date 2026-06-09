@@ -45,6 +45,37 @@
   "main": "./dist/core.cjs",
   "module": "./dist/core.js",
   "types": "./dist/core.d.ts",
+  "typesVersions": {
+    "*": {
+      "cloudflare": [
+        "./dist/cloudflare.d.ts"
+      ],
+      "netlify": [
+        "./dist/netlify.d.ts"
+      ],
+      "next": [
+        "./dist/next.d.ts"
+      ],
+      "astro": [
+        "./dist/astro.d.ts"
+      ],
+      "sveltekit": [
+        "./dist/sveltekit.d.ts"
+      ],
+      "express": [
+        "./dist/express.d.ts"
+      ],
+      "hono": [
+        "./dist/hono.d.ts"
+      ],
+      "bun": [
+        "./dist/bun.d.ts"
+      ],
+      "proxy": [
+        "./dist/proxy.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "import": {
