@@ -47,14 +47,18 @@ function isMainModule(): boolean {
   }
 }
 
-async function main() {
+export async function main() {
   const args = process.argv
     .slice(2)
     .map((arg) => (arg === '-h' ? '--help' : arg === '-v' ? '--version' : arg))
   const command = args[0]?.startsWith('--') ? undefined : args[0]
 
   try {
-    const flags = parseFlags(command === undefined ? args : args.slice(1))
+    // `sitepass help <topic>` is a usage request, so its positionals are never
+    // typos worth rejecting; flags still parse so --version wins as it does on
+    // every other command.
+    const rest = command === undefined ? args : args.slice(1)
+    const flags = parseFlags(command === 'help' ? rest.filter((arg) => arg.startsWith('--')) : rest)
     // Help and version always win, before any command runs: `sitepass init
     // --help` must print usage, not start an interactive init.
     if (flags.version) {
@@ -82,7 +86,8 @@ async function main() {
 
 async function runInit(flags: Flags) {
   const target = await resolveTarget(flags)
-  const envPath = asString(flags['env-file']) ?? (target === 'cloudflare' ? '.dev.vars' : '.env')
+  const envPath =
+    asString('env-file', flags['env-file']) ?? (target === 'cloudflare' ? '.dev.vars' : '.env')
 
   // Never clobber an existing secret: a regenerated one would invalidate every
   // live session. Keep the password the user already set, too.
@@ -98,7 +103,7 @@ async function runInit(flags: Flags) {
     )
   }
 
-  let password = existingPassword || asString(flags.password) || ''
+  let password = existingPassword || asString('password', flags.password) || ''
   if (!password && isInteractive()) {
     password = await prompt('Shared password (leave blank to set later): ')
   }
@@ -145,7 +150,7 @@ export function ensureGitignored(file: string): 'added' | 'present' | 'skipped' 
 }
 
 function runProxy(flags: Flags) {
-  const origin = asString(flags.origin)
+  const origin = asString('origin', flags.origin)
   if (!origin)
     throw new Error('sitepass proxy requires --origin <url>, e.g. --origin http://localhost:8080')
   // "localhost:8080" is a valid URL whose protocol is "localhost:", so require
@@ -155,7 +160,7 @@ function runProxy(flags: Flags) {
   if (!originUrl || (originUrl.protocol !== 'http:' && originUrl.protocol !== 'https:')) {
     throw new Error(`Invalid --origin "${origin}": expected a full URL like http://localhost:8080.`)
   }
-  const rawPort = asString(flags.port)
+  const rawPort = asString('port', flags.port)
   const port = rawPort === undefined ? 8788 : Number(rawPort)
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`Invalid --port "${rawPort}": expected a number between 0 and 65535.`)
@@ -164,7 +169,7 @@ function runProxy(flags: Flags) {
   // The implicit .env default may be absent, but a path the user typed must
   // exist — a typo'd --env-file would otherwise be silently ignored and the
   // gate would fail closed with a misleading "run sitepass init" hint.
-  const envFile = asString(flags['env-file'])
+  const envFile = asString('env-file', flags['env-file'])
   loadDotenv(envFile ?? '.env', envFile !== undefined)
   const password = process.env.SITEPASS_PASSWORD ?? ''
   const secret = process.env.SITEPASS_SECRET ?? ''
@@ -177,7 +182,7 @@ function runProxy(flags: Flags) {
     )
   }
 
-  const sessionSecondsFlag = asString(flags['session-seconds'])
+  const sessionSecondsFlag = asString('session-seconds', flags['session-seconds'])
   let sessionSeconds: number | undefined
   if (sessionSecondsFlag !== undefined) {
     sessionSeconds = Number(sessionSecondsFlag)
@@ -193,14 +198,15 @@ function runProxy(flags: Flags) {
     port,
     password,
     secret,
-    publicPaths: asString(flags['public-paths'])
+    publicPaths: asString('public-paths', flags['public-paths'])
       ?.split(',')
       .map((entry) => entry.trim())
       .filter((entry) => entry !== ''),
-    loginPath: asString(flags['login-path']),
-    cookieName: asString(flags['cookie-name']),
+    loginPath: asString('login-path', flags['login-path']),
+    cookieName: asString('cookie-name', flags['cookie-name']),
     sessionSeconds,
-    bypassToken: asString(flags['bypass-token']) ?? process.env.SITEPASS_BYPASS_TOKEN,
+    bypassToken:
+      asString('bypass-token', flags['bypass-token']) ?? process.env.SITEPASS_BYPASS_TOKEN,
     // --insecure-cookie drops the Secure attribute for plain-HTTP (LAN) use;
     // without it, browsers reject the cookie and login silently loops.
     cookieSecure: flagEnabled('insecure-cookie', flags['insecure-cookie']) ? false : undefined,
@@ -225,7 +231,7 @@ function runProxy(flags: Flags) {
 }
 
 async function resolveTarget(flags: Flags): Promise<Target> {
-  const fromFlag = asString(flags.target)
+  const fromFlag = asString('target', flags.target)
   if (fromFlag) {
     if (!isTarget(fromFlag))
       throw new Error(`Unknown target "${fromFlag}". One of: ${TARGETS.join(', ')}`)
@@ -323,7 +329,11 @@ export function rejectUnknownFlags(command: keyof typeof KNOWN_FLAGS, flags: Fla
   }
 }
 
-function asString(value: string | boolean | undefined): string | undefined {
+// A value flag given bare (`--env-file` with nothing after it) parses as
+// boolean true. Treating that as unset would silently fall back to the very
+// default the user tried to override, so it is a hard error instead.
+function asString(name: string, value: string | boolean | undefined): string | undefined {
+  if (value === true) throw new Error(`--${name} requires a value (see sitepass --help).`)
   return typeof value === 'string' ? value : undefined
 }
 
