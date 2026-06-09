@@ -1,9 +1,27 @@
 import type { IncomingMessage } from 'node:http'
 
 /**
- * Capped body readers for the Node-side consumers (the Express adapter and the
- * reverse proxy). Internal: not a package export; bundled into their chunks.
+ * Capped body readers and raw-request helpers for the Node-side consumers (the
+ * Express adapter and the reverse proxy). Internal: not a package export;
+ * bundled into their chunks.
  */
+
+/**
+ * Split a raw request target into path and search at the first "?". The gate
+ * decision and the proxy's forward target must parse the same raw URL the same
+ * way — a divergence between them is exactly the traversal class the gate's
+ * publicPaths hardening defends against — so every site shares this one split.
+ */
+export function splitRequestTarget(rawUrl: string): { path: string; search: string } {
+  const queryAt = rawUrl.indexOf('?')
+  if (queryAt === -1) return { path: rawUrl, search: '' }
+  return { path: rawUrl.slice(0, queryAt), search: rawUrl.slice(queryAt) }
+}
+
+/** Collapse Node's string | string[] header shape to the first value. */
+export function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
+}
 
 /** Thrown when a request body exceeds the byte limit; callers map it to 413. */
 export class BodyTooLargeError extends Error {}

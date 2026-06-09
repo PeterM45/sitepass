@@ -1,12 +1,8 @@
 import type { Handle } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { createGate, type GateOptions } from './core'
-import { gateWebRequest } from './web'
+import { type AdapterGateOptions, createGateFromEnv, gateWebRequest } from './web'
 
-export type SvelteKitGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
-  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number | undefined
-}
+export type SvelteKitGateOptions = AdapterGateOptions
 
 /**
  * SvelteKit server hook adapter. It only runs for server-rendered requests:
@@ -22,12 +18,7 @@ export type SvelteKitGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
  * via $env/dynamic/private, which maps to process.env under adapter-node).
  */
 export function gate({ maxBodyBytes, ...options }: SvelteKitGateOptions = {}): Handle {
-  const g = createGate({
-    ...options,
-    password: env.SITEPASS_PASSWORD ?? '',
-    secret: env.SITEPASS_SECRET ?? '',
-    bypassToken: options.bypassToken ?? env.SITEPASS_BYPASS_TOKEN,
-  })
+  const g = createGateFromEnv(options, (name) => env[name] ?? '')
 
   return async ({ event, resolve }) =>
     (await gateWebRequest(g, event.request, maxBodyBytes)) ?? resolve(event)

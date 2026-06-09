@@ -1,11 +1,8 @@
 import type { Context, MiddlewareHandler } from 'hono'
-import { createGate, type Gate, type GateOptions } from './core'
-import { envString, gateWebRequest } from './web'
+import type { Gate } from './core'
+import { type AdapterGateOptions, createGateFromEnv, envString, gateWebRequest } from './web'
 
-export type HonoGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
-  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number | undefined
-}
+export type HonoGateOptions = AdapterGateOptions
 
 /**
  * Hono middleware adapter.
@@ -22,12 +19,7 @@ export function gate({ maxBodyBytes, ...options }: HonoGateOptions = {}): Middle
   // c.env is only available per request, so build the gate on first use.
   let cached: Gate | undefined
   const gateFor = (c: Context) => {
-    cached ??= createGate({
-      ...options,
-      password: readEnv(c, 'SITEPASS_PASSWORD'),
-      secret: readEnv(c, 'SITEPASS_SECRET'),
-      bypassToken: options.bypassToken ?? (readEnv(c, 'SITEPASS_BYPASS_TOKEN') || undefined),
-    })
+    cached ??= createGateFromEnv(options, (name) => readEnv(c, name))
     return cached
   }
 

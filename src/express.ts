@@ -1,15 +1,14 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
-import { createGate, type GateOptions, readCookie } from './core'
-import { BodyTooLargeError, readRawBody } from './node-body'
+import { readCookie } from './core'
+import { BodyTooLargeError, firstHeaderValue, readRawBody, splitRequestTarget } from './node-body'
+import {
+  type AdapterGateOptions,
+  BYPASS_HEADER,
+  createGateFromEnv,
+  DEFAULT_MAX_BODY_BYTES,
+} from './web'
 
-export type ExpressGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
-  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number | undefined
-}
-
-// A login form body (next + password) is tiny; 64 KiB is generous headroom while
-// keeping an unauthenticated POST to the login path from buffering without bound.
-const DEFAULT_MAX_BODY_BYTES = 64 * 1024
+export type ExpressGateOptions = AdapterGateOptions
 
 /**
  * Express middleware adapter.
@@ -26,21 +25,14 @@ export function gate({
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   ...options
 }: ExpressGateOptions = {}): RequestHandler {
-  const g = createGate({
-    ...options,
-    password: process.env.SITEPASS_PASSWORD ?? '',
-    secret: process.env.SITEPASS_SECRET ?? '',
-    bypassToken: options.bypassToken ?? process.env.SITEPASS_BYPASS_TOKEN,
-  })
+  const g = createGateFromEnv(options, (name) => process.env[name] ?? '')
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     // Derive path and search from originalUrl so the gate is correct regardless of
     // the mount point: req.path is mount-relative, so app.use('/x', gate()) would
     // make req.path "/y" for a request to "/x/y" and never match an absolute
     // loginPath like "/__gate".
-    const queryAt = req.originalUrl.indexOf('?')
-    const path = queryAt === -1 ? req.originalUrl : req.originalUrl.slice(0, queryAt)
-    const search = queryAt === -1 ? '' : req.originalUrl.slice(queryAt)
+    const { path, search } = splitRequestTarget(req.originalUrl)
     const isLoginPost = req.method.toUpperCase() === 'POST' && path === g.loginPath
 
     // This promise must never reject: Express 4 does not route a rejected
@@ -68,7 +60,7 @@ export function gate({
         path,
         search,
         cookie: readCookie(req.headers.cookie, g.cookieName),
-        bypassToken: headerValue(req.headers['x-sitepass-bypass']),
+        bypassToken: firstHeaderValue(req.headers[BYPASS_HEADER]),
         body,
       })
 
@@ -87,8 +79,4 @@ export function gate({
       next(error)
     }
   }
-}
-
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value
 }

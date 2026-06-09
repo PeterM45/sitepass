@@ -1,12 +1,8 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
-import { createGate, type GateOptions } from './core'
-import { gateWebRequest } from './web'
+import { type AdapterGateOptions, createGateFromEnv, gateWebRequest } from './web'
 
-export type NextGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
-  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number | undefined
-}
+export type NextGateOptions = AdapterGateOptions
 
 /**
  * Next.js middleware adapter (App Router).
@@ -25,12 +21,7 @@ export type NextGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
  * leaves raw JS chunks reachable; the page content stays gated).
  */
 export function gate({ maxBodyBytes, ...options }: NextGateOptions = {}) {
-  const g = createGate({
-    ...options,
-    password: process.env.SITEPASS_PASSWORD ?? '',
-    secret: process.env.SITEPASS_SECRET ?? '',
-    bypassToken: options.bypassToken ?? process.env.SITEPASS_BYPASS_TOKEN,
-  })
+  const g = createGateFromEnv(options, (name) => process.env[name] ?? '')
 
   return async (request: NextRequest): Promise<Response> => {
     const response = await gateWebRequest(g, request, maxBodyBytes)

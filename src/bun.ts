@@ -1,5 +1,4 @@
-import { createGate, type GateOptions } from './core'
-import { gateWebRequest } from './web'
+import { type AdapterGateOptions, createGateFromEnv, gateWebRequest } from './web'
 
 /**
  * The wrapped handler's shape. Generic over its rest arguments so handlers that
@@ -11,10 +10,7 @@ export type FetchHandler<A extends unknown[] = unknown[]> = (
   ...args: A
 ) => Response | Promise<Response>
 
-export type BunGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
-  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number | undefined
-}
+export type BunGateOptions = AdapterGateOptions
 
 /**
  * Bun.serve adapter. Wraps a fetch handler: the gate runs first, and on `pass`
@@ -30,12 +26,7 @@ export function gate<A extends unknown[]>(
   handler: FetchHandler<A>,
   { maxBodyBytes, ...options }: BunGateOptions = {},
 ): (request: Request, ...args: A) => Promise<Response> {
-  const g = createGate({
-    ...options,
-    password: process.env.SITEPASS_PASSWORD ?? '',
-    secret: process.env.SITEPASS_SECRET ?? '',
-    bypassToken: options.bypassToken ?? process.env.SITEPASS_BYPASS_TOKEN,
-  })
+  const g = createGateFromEnv(options, (name) => process.env[name] ?? '')
 
   return async (request, ...args) =>
     (await gateWebRequest(g, request, maxBodyBytes)) ?? handler(request, ...args)
