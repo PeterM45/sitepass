@@ -82,7 +82,7 @@ sitepass deliberately ships no React, Angular, or Vue component that hides conte
 | Reverse proxy | `sitepass proxy` | standalone Node/Bun server | Yes |
 | Next.js | `sitepass/next` | `middleware.ts` / `proxy.ts` | App routes (see matcher note) |
 | Astro | `sitepass/astro` | `src/middleware.ts` | On-demand routes only |
-| SvelteKit | `sitepass/sveltekit` | `src/hooks.server.ts` | Yes |
+| SvelteKit | `sitepass/sveltekit` | `src/hooks.server.ts` | SSR routes only |
 | Express | `sitepass/express` | `app.use(gate())` | Yes |
 | Hono | `sitepass/hono` | `app.use(gate())` | Yes |
 | Bun | `sitepass/bun` | `Bun.serve({ fetch: gate(handler) })` | Yes |
@@ -120,6 +120,8 @@ gate({
 
 `password` and `secret` are not options. Every adapter reads them from the environment so they never end up in your source. `publicPaths` matches whole path segments, so `/api/webhooks` covers `/api/webhooks/stripe` but not `/apixyz`.
 
+The Bun adapter is the one exception to the factory shape: the handler comes first — `gate(myHandler, options)`.
+
 The Next.js matcher is a tradeoff. Excluding `_next/static` keeps middleware invocations (and cost) down, but the raw JS chunks under that path are then reachable without the password. The actual page content lives in the gated HTML and RSC payload, so the protected text and data stay behind the gate; the build artifacts do not.
 
 ## Security model
@@ -136,6 +138,7 @@ The Next.js matcher is a tradeoff. Excluding `_next/static` keeps middleware inv
 - A shared-password gate is brute-forceable, and there is no built-in rate limiting because there is no datastore. Use a long passphrase. KV-backed rate limiting is on the roadmap.
 - It is one password for everyone. There are no per-user accounts, roles, or audit logs. If you need those, you want a real auth provider.
 - The Astro adapter only enforces on routes rendered on demand. A fully static Astro build runs middleware at build time, not per request, so use the Cloudflare or Netlify adapter for static Astro (or set `export const prerender = false` with an adapter).
+- The SvelteKit adapter has the same boundary: `handle` only runs for server-rendered requests, so prerendered pages and the client assets under `/_app` are served without the gate. For a fully prerendered SvelteKit site, use the Cloudflare or Netlify adapter.
 - `Secure` cookies require HTTPS. That is fine in production and on the platforms above; for plain-HTTP localhost testing, use a tunnel or the platform's dev server, which terminate TLS.
 
 ## License
