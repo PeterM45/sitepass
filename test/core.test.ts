@@ -202,6 +202,20 @@ describe('createGate', () => {
     expect((await bad.handle({ method: 'GET', path: '/x', cookie: token })).type).toBe('pass')
   })
 
+  it('21b. a fractional sessionSeconds is floored so the minted cookie still validates', async () => {
+    for (const seconds of [86400.5, 3600.999]) {
+      const g = gate({ sessionSeconds: seconds })
+      const res = asRedirect(await login(g, PASSWORD))
+      expect(res.setCookie.endsWith(`Max-Age=${Math.floor(seconds)}`)).toBe(true)
+      const token = readCookie(res.setCookie, g.cookieName) ?? ''
+      expect((await g.handle({ method: 'GET', path: '/x', cookie: token })).type).toBe('pass')
+    }
+    // 0.5 floors to 0: an immediately expired token, same as sessionSeconds: 0 —
+    // not a fractional expiry the verifier can never accept.
+    const res = asRedirect(await login(gate({ sessionSeconds: 0.5 }), PASSWORD))
+    expect(res.setCookie.endsWith('Max-Age=0')).toBe(true)
+  })
+
   it('15. a matching bypass token passes without a session; a wrong one does not', async () => {
     const g = gate({ bypassToken: 'ci-bypass-token-123' })
     const ok = await g.handle({ method: 'GET', path: '/x', bypassToken: 'ci-bypass-token-123' })
