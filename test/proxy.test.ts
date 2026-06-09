@@ -1,11 +1,9 @@
-import { createServer, type Server } from 'node:http'
+import { createServer, type Server, type ServerResponse } from 'node:http'
 import { connect } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { readCookie } from '../src/core'
 import { type ProxyOptions, startProxy } from '../src/proxy'
-
-const PASSWORD = 'correct horse battery staple'
-const SECRET = 'a-test-secret-that-is-plenty-long-1234567890'
+import { PASSWORD, SECRET } from './fixtures/credentials'
 
 // Servers opened by a test, torn down after it so ports never leak between tests.
 const open: Server[] = []
@@ -182,10 +180,15 @@ describe('reverse proxy robustness', () => {
   })
 
   it('survives an upstream connection reset mid-body instead of crashing the process', async () => {
+    // The reset must happen AFTER the proxy has forwarded the response headers,
+    // so the failure lands in the body-streaming pipeline rather than the
+    // pre-stream 502 path. The origin parks the response and the test destroys
+    // it only once the client has read the first proxied chunk.
+    let parked: ServerResponse | undefined
     const origin = await listen((_req, res) => {
+      parked = res
       res.writeHead(200, { 'content-type': 'text/plain' })
       res.write('partial')
-      res.destroy()
     })
     const port = await proxy({
       origin: `http://127.0.0.1:${origin.port}`,
@@ -194,13 +197,112 @@ describe('reverse proxy robustness', () => {
     })
 
     const token = await loginCookie(port)
-    // The forwarded response is cut off mid-body; the proxy must not crash.
-    await fetch(`http://127.0.0.1:${port}/stream`, { headers: { cookie: `gate=${token}` } })
-      .then((r) => r.text())
-      .catch(() => {})
+    const res = await fetch(`http://127.0.0.1:${port}/stream`, {
+      headers: { cookie: `gate=${token}` },
+    })
+    expect(res.status).toBe(200)
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error('no body')
+    const first = await reader.read()
+    expect(new TextDecoder().decode(first.value)).toBe('partial')
+
+    // Now cut the upstream mid-body; reading the rest must fail, not crash.
+    parked?.destroy()
+    await reader.read().catch(() => {})
 
     // Proof of life: the proxy still answers (gate-served 401, origin untouched).
     const live = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' })
     expect(live.status).toBe(401)
+  })
+
+  it('caps the unauthenticated login body with 413', async () => {
+    const origin = await listen((_req, res) => res.end('OK'))
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+      maxBodyBytes: 1024,
+    })
+
+    const res = await fetch(`http://127.0.0.1:${port}/__gate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: `password=${'a'.repeat(50_000)}`,
+      redirect: 'manual',
+    })
+    expect(res.status).toBe(413)
+  })
+})
+
+describe('reverse proxy forwarding', () => {
+  it('forwards a request body to the origin byte-for-byte', async () => {
+    const origin = await listen((req, res) => {
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => res.end(Buffer.concat(chunks)))
+    })
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+    })
+
+    const token = await loginCookie(port)
+    const body = JSON.stringify({ hello: 'world', n: 42 })
+    const res = await fetch(`http://127.0.0.1:${port}/api`, {
+      method: 'POST',
+      headers: { cookie: `gate=${token}`, 'content-type': 'application/json' },
+      body,
+    })
+    expect(await res.text()).toBe(body)
+  })
+
+  it('pins host, strips hop-by-hop headers and the gate cookie, and adds X-Forwarded-*', async () => {
+    let seen: Record<string, string | string[] | undefined> = {}
+    const origin = await listen((req, res) => {
+      seen = req.headers
+      res.end('OK')
+    })
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+    })
+
+    const token = await loginCookie(port)
+    const res = await fetch(`http://127.0.0.1:${port}/x`, {
+      headers: { cookie: `other=1; gate=${token}; theme=dark`, 'x-custom': 'kept' },
+    })
+    expect(res.status).toBe(200)
+
+    // Host is pinned to the origin, never taken from the client request.
+    expect(seen.host).toBe(`127.0.0.1:${origin.port}`)
+    // The gate's own session token never reaches the origin; other cookies do.
+    expect(seen.cookie).toBe('other=1; theme=dark')
+    // Ordinary headers pass through; connection-specific ones do not.
+    expect(seen['x-custom']).toBe('kept')
+    expect(seen['proxy-authorization']).toBeUndefined()
+    // Forwarded-request metadata names the real client (Node may report the
+    // loopback as the IPv4-mapped IPv6 form ::ffff:127.0.0.1).
+    expect(seen['x-forwarded-for']).toContain('127.0.0.1')
+    expect(seen['x-forwarded-proto']).toBe('http')
+    expect(seen['x-forwarded-host']).toBe(`127.0.0.1:${port}`)
+  })
+
+  it('drops the Cookie header entirely when the gate cookie was the only one', async () => {
+    let seen: Record<string, string | string[] | undefined> = {}
+    const origin = await listen((req, res) => {
+      seen = req.headers
+      res.end('OK')
+    })
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+    })
+
+    const token = await loginCookie(port)
+    await fetch(`http://127.0.0.1:${port}/x`, { headers: { cookie: `gate=${token}` } })
+    expect(seen.cookie).toBeUndefined()
   })
 })
