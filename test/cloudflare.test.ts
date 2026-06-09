@@ -50,4 +50,24 @@ describe('cloudflare adapter gates a static SPA at the edge', () => {
     expect(res.status).toBe(200)
     expect(await res.text()).toContain('id="root"')
   })
+
+  it('fails closed with 503 when the env carries no credentials', async () => {
+    // Locks the fail-closed contract at the adapter boundary: wired up but
+    // unconfigured must mean "nothing served", not a crash or a pass.
+    const bare = gate()
+    const res = await bare(context(new Request('https://app.test/'), {}))
+    expect(res.status).toBe(503)
+    expect((await res.text()).toLowerCase()).toContain('not configured')
+  })
+
+  it('treats non-string env bindings as unset instead of crashing', async () => {
+    const bare = gate()
+    const res = await bare(
+      context(new Request('https://app.test/'), {
+        SITEPASS_PASSWORD: 123 as unknown as string,
+        SITEPASS_SECRET: { kv: true } as unknown as string,
+      }),
+    )
+    expect(res.status).toBe(503)
+  })
 })

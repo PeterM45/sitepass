@@ -1,48 +1,41 @@
-import { createGate, type GateOptions, readCookie } from './core'
+import { createGate, type GateOptions } from './core'
+import { gateWebRequest } from './web'
 
-type FetchHandler = (request: Request) => Response | Promise<Response>
+/**
+ * The wrapped handler's shape. Generic over its rest arguments so handlers that
+ * take Bun.serve's `server` parameter — e.g. the `server.upgrade(req)`
+ * websocket pattern — keep their signature through the wrapper.
+ */
+export type FetchHandler<A extends unknown[] = unknown[]> = (
+  request: Request,
+  ...args: A
+) => Response | Promise<Response>
+
+export type BunGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
+  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
+  maxBodyBytes?: number
+}
 
 /**
  * Bun.serve adapter. Wraps a fetch handler: the gate runs first, and on `pass`
- * the wrapped handler is called; otherwise the gate's response is returned.
+ * the wrapped handler is called with all of its original arguments; otherwise
+ * the gate's response is returned.
  *
  *   import { gate } from 'sitepass/bun'
  *   Bun.serve({ fetch: gate(myHandler) })
  *
  * Set SITEPASS_PASSWORD and SITEPASS_SECRET in the environment (Bun loads .env).
  */
-export function gate(
-  handler: FetchHandler,
-  options: Omit<GateOptions, 'password' | 'secret'> = {},
-): FetchHandler {
+export function gate<A extends unknown[]>(
+  handler: FetchHandler<A>,
+  { maxBodyBytes, ...options }: BunGateOptions = {},
+): (request: Request, ...args: A) => Promise<Response> {
   const g = createGate({
     ...options,
     password: process.env.SITEPASS_PASSWORD ?? '',
     secret: process.env.SITEPASS_SECRET ?? '',
   })
 
-  return async (request) => {
-    const url = new URL(request.url)
-    const isLoginPost = request.method.toUpperCase() === 'POST' && url.pathname === g.loginPath
-
-    const result = await g.handle({
-      method: request.method,
-      path: url.pathname,
-      search: url.search,
-      cookie: readCookie(request.headers.get('cookie'), g.cookieName),
-      body: isLoginPost ? await request.text() : undefined,
-    })
-
-    switch (result.type) {
-      case 'pass':
-        return handler(request)
-      case 'redirect':
-        return new Response(null, {
-          status: 302,
-          headers: { Location: result.location, 'Set-Cookie': result.setCookie },
-        })
-      case 'html':
-        return new Response(result.body, { status: result.status, headers: result.headers })
-    }
-  }
+  return async (request, ...args) =>
+    (await gateWebRequest(g, request, maxBodyBytes)) ?? handler(request, ...args)
 }

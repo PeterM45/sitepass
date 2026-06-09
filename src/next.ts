@@ -1,6 +1,12 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { createGate, type GateOptions } from './core'
+import { gateWebRequest } from './web'
+
+export type NextGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
+  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
+  maxBodyBytes?: number
+}
 
 /**
  * Next.js middleware adapter (App Router).
@@ -18,7 +24,7 @@ import { createGate, type GateOptions } from './core'
  * for the matcher tradeoff (excluding static assets keeps invocations down but
  * leaves raw JS chunks reachable; the page content stays gated).
  */
-export function gate(options: Omit<GateOptions, 'password' | 'secret'> = {}) {
+export function gate({ maxBodyBytes, ...options }: NextGateOptions = {}) {
   const g = createGate({
     ...options,
     password: process.env.SITEPASS_PASSWORD ?? '',
@@ -26,27 +32,17 @@ export function gate(options: Omit<GateOptions, 'password' | 'secret'> = {}) {
   })
 
   return async (request: NextRequest): Promise<Response> => {
-    const { nextUrl } = request
-    const isLoginPost = request.method.toUpperCase() === 'POST' && nextUrl.pathname === g.loginPath
-
-    const result = await g.handle({
-      method: request.method,
-      path: nextUrl.pathname,
-      search: nextUrl.search,
-      cookie: request.cookies.get(g.cookieName)?.value,
-      body: isLoginPost ? await request.text() : undefined,
-    })
-
-    switch (result.type) {
-      case 'pass':
-        return NextResponse.next()
-      case 'redirect': {
-        const response = NextResponse.redirect(new URL(result.location, request.url), 302)
-        response.headers.append('Set-Cookie', result.setCookie)
-        return response
-      }
-      case 'html':
-        return new Response(result.body, { status: result.status, headers: result.headers })
+    const response = await gateWebRequest(g, request, maxBodyBytes)
+    if (!response) return NextResponse.next()
+    if (response.status === 302) {
+      // Keep Next's idiom for redirects: NextResponse.redirect wants an
+      // absolute URL, resolved against the incoming request.
+      const location = response.headers.get('location') ?? '/'
+      const redirect = NextResponse.redirect(new URL(location, request.url), 302)
+      const cookie = response.headers.get('set-cookie')
+      if (cookie) redirect.headers.append('Set-Cookie', cookie)
+      return redirect
     }
+    return response
   }
 }

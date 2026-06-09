@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createGate, type GateOptions, type GateResult, readCookie } from '../src/core'
-
-const PASSWORD = 'correct horse battery staple'
-const SECRET = 'a-test-secret-that-is-plenty-long-1234567890'
+import { PASSWORD, SECRET } from './fixtures/credentials'
 
 function gate(overrides: Partial<GateOptions> = {}) {
   return createGate({ password: PASSWORD, secret: SECRET, ...overrides })

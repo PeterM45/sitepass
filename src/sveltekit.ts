@@ -1,9 +1,17 @@
 import type { Handle } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { createGate, type GateOptions } from './core'
+import { gateWebRequest } from './web'
+
+export type SvelteKitGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
+  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
+  maxBodyBytes?: number
+}
 
 /**
- * SvelteKit server hook adapter.
+ * SvelteKit server hook adapter. It only runs for server-rendered requests:
+ * prerendered pages and the client assets under /_app bypass server hooks, so
+ * use the Cloudflare or Netlify adapter for a fully prerendered site.
  *
  * Wire it up in src/hooks.server.ts:
  *
@@ -13,35 +21,13 @@ import { createGate, type GateOptions } from './core'
  * Set SITEPASS_PASSWORD and SITEPASS_SECRET in the environment (read at runtime
  * via $env/dynamic/private, which maps to process.env under adapter-node).
  */
-export function gate(options: Omit<GateOptions, 'password' | 'secret'> = {}): Handle {
+export function gate({ maxBodyBytes, ...options }: SvelteKitGateOptions = {}): Handle {
   const g = createGate({
     ...options,
     password: env.SITEPASS_PASSWORD ?? '',
     secret: env.SITEPASS_SECRET ?? '',
   })
 
-  return async ({ event, resolve }) => {
-    const { request, url } = event
-    const isLoginPost = request.method.toUpperCase() === 'POST' && url.pathname === g.loginPath
-
-    const result = await g.handle({
-      method: request.method,
-      path: url.pathname,
-      search: url.search,
-      cookie: event.cookies.get(g.cookieName),
-      body: isLoginPost ? await request.text() : undefined,
-    })
-
-    switch (result.type) {
-      case 'pass':
-        return resolve(event)
-      case 'redirect':
-        return new Response(null, {
-          status: 302,
-          headers: { Location: result.location, 'Set-Cookie': result.setCookie },
-        })
-      case 'html':
-        return new Response(result.body, { status: result.status, headers: result.headers })
-    }
-  }
+  return async ({ event, resolve }) =>
+    (await gateWebRequest(g, event.request, maxBodyBytes)) ?? resolve(event)
 }
