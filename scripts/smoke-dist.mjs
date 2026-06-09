@@ -1,13 +1,20 @@
-// Smoke-test the built package surface: import every published dist entry in
-// both formats, assert the expected export exists, and run the CLI. Catches
-// packaging regressions (tsup config, exports map, ESM/CJS interop) that the
-// unit tests — which import src/ — would ship to npm green.
+// Smoke-test the built package surface, because the unit tests import src/ and
+// would ship packaging regressions green. Stage 1 imports every dist entry by
+// file path in both formats and runs the CLI (catches tsup config and ESM/CJS
+// interop breakage). Stage 2 installs the packed tarball into a throwaway
+// consumer project and imports every public subpath by its package specifier
+// in both formats — resolving through the exports map the way consumers
+// actually do — then runs a minimal gate() call through the installed package.
 import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
 const dist = (file) => fileURLToPath(new URL(`../dist/${file}`, import.meta.url))
+const packageRoot = fileURLToPath(new URL('..', import.meta.url))
 
 // [entry base name, expected export, host-resolved import]. Some adapters
 // import modules that only resolve inside their host's build: SvelteKit's
@@ -63,4 +70,85 @@ if (!help.includes('sitepass')) {
   throw new Error('dist/cli.js help output looks wrong')
 }
 
-console.log(`smoke-dist: ${checked} entries OK in both formats, CLI runs`)
+// Stage 2. The check script is generated once per format: `load` renders the
+// loader expression (dynamic import vs require — `await` is harmless on the
+// synchronous require result).
+const specifiers = entries.map(([name, expected, hostResolved]) => [
+  name === 'core' ? 'sitepass' : `sitepass/${name}`,
+  expected,
+  hostResolved ?? null,
+])
+
+const consumerCheck = (load) => `const entries = ${JSON.stringify(specifiers)}
+const tolerated = (error, hostResolved) => {
+  if (hostResolved === null) return false
+  const message = String(error?.message ?? error)
+  return message.includes(hostResolved) || message.includes("'" + hostResolved.split('/')[0] + "'")
+}
+async function main() {
+  for (const [specifier, expected, hostResolved] of entries) {
+    try {
+      const mod = await ${load('specifier')}
+      if (typeof mod[expected] !== 'function') {
+        throw new Error(specifier + ' does not export function ' + expected)
+      }
+    } catch (error) {
+      if (!tolerated(error, hostResolved)) throw error
+    }
+  }
+  // A real call through the installed package: an anonymous request to a
+  // configured gate must yield the 401 login page.
+  const { createGate } = await ${load("'sitepass'")}
+  const gate = createGate({ password: 'smoke', secret: 'smoke-secret-0123456789abcdef' })
+  const result = await gate.handle({ method: 'GET', path: '/' })
+  if (result.type !== 'html' || result.status !== 401) {
+    throw new Error('expected a 401 login page, got ' + JSON.stringify(result))
+  }
+}
+main().catch((error) => {
+  console.error(error)
+  process.exit(1)
+})
+`
+
+const npm = (args, cwd) => execFileSync('npm', args, { cwd, encoding: 'utf8' })
+
+const work = mkdtempSync(join(tmpdir(), 'sitepass-smoke-'))
+try {
+  // publish.yml passes the exact tarball it is about to publish. With no
+  // argument, pack one here — --ignore-scripts so prepack's tsup doesn't
+  // rebuild the dist that stage 1 just verified.
+  const packArgs = ['pack', '--ignore-scripts', '--json', '--pack-destination', work]
+  const packed = process.argv[2]
+    ? resolve(process.argv[2])
+    : join(work, JSON.parse(npm(packArgs, packageRoot))[0].filename)
+
+  const consumer = join(work, 'consumer')
+  mkdirSync(consumer)
+  const manifest = JSON.stringify({ name: 'smoke-consumer', private: true })
+  writeFileSync(join(consumer, 'package.json'), manifest)
+  // --legacy-peer-deps skips auto-installing the optional framework peers; the
+  // two imports that need a host (next/server, $env/dynamic/private) are
+  // tolerated above, same as stage 1.
+  npm(
+    ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--legacy-peer-deps', packed],
+    consumer,
+  )
+
+  writeFileSync(
+    join(consumer, 'check.mjs'),
+    consumerCheck((expr) => `import(${expr})`),
+  )
+  writeFileSync(
+    join(consumer, 'check.cjs'),
+    consumerCheck((expr) => `require(${expr})`),
+  )
+  execFileSync(process.execPath, ['check.mjs'], { cwd: consumer, stdio: 'inherit' })
+  execFileSync(process.execPath, ['check.cjs'], { cwd: consumer, stdio: 'inherit' })
+} finally {
+  rmSync(work, { recursive: true, force: true })
+}
+
+console.log(
+  `smoke-dist: ${checked} dist entries and ${specifiers.length} packed subpaths OK in both formats, CLI runs`,
+)
