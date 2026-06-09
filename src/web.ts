@@ -1,4 +1,4 @@
-import { type Gate, type GateResult, readCookie } from './core'
+import { createGate, type Gate, type GateOptions, type GateResult, readCookie } from './core'
 
 /**
  * Shared plumbing for every adapter whose host speaks web Request/Response.
@@ -10,6 +10,35 @@ import { type Gate, type GateResult, readCookie } from './core'
 // A login form body (next + password) is tiny; 64 KiB is generous headroom while
 // keeping an unauthenticated POST to the login path from buffering without bound.
 export const DEFAULT_MAX_BODY_BYTES = 64 * 1024
+
+// The request header carrying the bypass credential. The reverse proxy's strip
+// list must name exactly the header the adapters read, or the live credential
+// would be forwarded to the origin — so every site shares this one constant.
+export const BYPASS_HEADER = 'x-sitepass-bypass'
+
+/** The options every adapter accepts: the gate options minus the env-sourced credentials. */
+export type AdapterGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
+  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
+  maxBodyBytes?: number | undefined
+}
+
+/**
+ * Build a gate with credentials read from the adapter's environment. The env
+ * var names and the empty-bypass normalization live here, once: an env reader
+ * that returns '' counts as unset, so a blank SITEPASS_BYPASS_TOKEN can never
+ * become a working bypass credential in any adapter.
+ */
+export function createGateFromEnv(
+  options: Omit<GateOptions, 'password' | 'secret'>,
+  readEnv: (name: 'SITEPASS_PASSWORD' | 'SITEPASS_SECRET' | 'SITEPASS_BYPASS_TOKEN') => string,
+): Gate {
+  return createGate({
+    ...options,
+    password: readEnv('SITEPASS_PASSWORD'),
+    secret: readEnv('SITEPASS_SECRET'),
+    bypassToken: options.bypassToken ?? (readEnv('SITEPASS_BYPASS_TOKEN') || undefined),
+  })
+}
 
 /**
  * Run the gate against a web Request. Returns null when the request may pass —
@@ -42,7 +71,7 @@ export async function gateWebRequest(
     path: url.pathname,
     search: url.search,
     cookie: readCookie(request.headers.get('cookie'), gate.cookieName),
-    bypassToken: request.headers.get('x-sitepass-bypass') ?? undefined,
+    bypassToken: request.headers.get(BYPASS_HEADER) ?? undefined,
     body,
   })
   return toResponse(result)
@@ -54,7 +83,7 @@ export function envString(value: unknown): string {
 }
 
 /** Translate a GateResult into a web Response; null means "pass". */
-export function toResponse(result: GateResult): Response | null {
+function toResponse(result: GateResult): Response | null {
   switch (result.type) {
     case 'pass':
       return null

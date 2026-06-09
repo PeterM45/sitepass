@@ -2,7 +2,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createGate, type Gate, type GateOptions, readCookie, sanitizeNext } from './core'
-import { BodyTooLargeError, readRawBody, readRawBuffer } from './node-body'
+import {
+  BodyTooLargeError,
+  firstHeaderValue,
+  readRawBody,
+  readRawBuffer,
+  splitRequestTarget,
+} from './node-body'
+import { BYPASS_HEADER, DEFAULT_MAX_BODY_BYTES as LOGIN_BODY_LIMIT } from './web'
 
 // Standalone reverse proxy that gates requests and, on pass, forwards them to a
 // configured origin and streams the response back. The escape hatch for
@@ -26,18 +33,14 @@ export type ProxyOptions = GateOptions & {
   trustProxy?: boolean | undefined
 }
 
-const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024
-
-// The login form body (next + password) is tiny; cap it at 64 KiB regardless of
-// the (larger) forward-body limit so an unauthenticated login POST stays bounded.
-const LOGIN_BODY_LIMIT = 64 * 1024
+const DEFAULT_MAX_FORWARD_BYTES = 10 * 1024 * 1024
 
 // Headers the client must not control: the gate's own bypass credential, and the
 // forwarded-request metadata, which a front-most proxy sets authoritatively. The
 // RFC 7239 `Forwarded` header is dropped (not re-emitted) so a client can't poison
 // a downstream that trusts it; we set only the X-Forwarded-* family.
 const CLIENT_CONTROLLED = new Set([
-  'x-sitepass-bypass',
+  BYPASS_HEADER,
   'forwarded',
   'x-forwarded-for',
   'x-forwarded-proto',
@@ -64,7 +67,7 @@ const HOP_BY_HOP = new Set([
 export function startProxy({
   origin,
   port,
-  maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
+  maxBodyBytes = DEFAULT_MAX_FORWARD_BYTES,
   trustProxy = false,
   ...gateOptions
 }: ProxyOptions) {
@@ -104,19 +107,15 @@ async function handle(
   trustProxy: boolean,
 ) {
   const method = req.method ?? 'GET'
-  const rawUrl = req.url ?? '/'
-  const queryAt = rawUrl.indexOf('?')
-  const path = queryAt === -1 ? rawUrl : rawUrl.slice(0, queryAt)
-  const search = queryAt === -1 ? '' : rawUrl.slice(queryAt)
+  const { path, search } = splitRequestTarget(req.url ?? '/')
   const isLoginPost = method.toUpperCase() === 'POST' && path === gate.loginPath
-  const bypass = req.headers['x-sitepass-bypass']
 
   const result = await gate.handle({
     method,
     path,
     search,
     cookie: readCookie(req.headers.cookie, gate.cookieName),
-    bypassToken: Array.isArray(bypass) ? bypass[0] : bypass,
+    bypassToken: firstHeaderValue(req.headers[BYPASS_HEADER]),
     // The login body is tiny; cap it well below the forward limit so an
     // unauthenticated POST to the login path can't buffer up to maxBodyBytes.
     body: isLoginPost
@@ -153,10 +152,9 @@ async function forward(
   // proxy into an SSRF pivot that also leaks the forwarded gate cookie. sanitizeNext
   // collapses those forms (and CR/LF) to "/", and assigning pathname keeps the host.
   const target = new URL(origin.href)
-  const safePath = sanitizeNext(req.url ?? '/')
-  const queryAt = safePath.indexOf('?')
-  target.pathname = queryAt === -1 ? safePath : safePath.slice(0, queryAt)
-  target.search = queryAt === -1 ? '' : safePath.slice(queryAt)
+  const safeTarget = splitRequestTarget(sanitizeNext(req.url ?? '/'))
+  target.pathname = safeTarget.path
+  target.search = safeTarget.search
 
   // Abort the upstream request if the client disconnects mid-flight, so a dropped
   // download doesn't leave the origin fetch running with nowhere to go.
@@ -271,12 +269,17 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value.join(', ') : value
 }
 
-/** Re-serialize a Cookie header without the named cookie; undefined if none remain. */
+/**
+ * Re-serialize a Cookie header without the named cookie; undefined if none
+ * remain. A part is dropped exactly when core's readCookie would read it, so
+ * the strip rule can never drift from the accept rule — a cookie the gate
+ * accepted must never be the one forwarded to the origin.
+ */
 function stripCookie(cookieHeader: string | undefined, name: string): string | undefined {
   if (!cookieHeader) return undefined
   const kept = cookieHeader
     .split(';')
     .map((part) => part.trim())
-    .filter((part) => part !== '' && part.slice(0, part.indexOf('=')).trim() !== name)
+    .filter((part) => part !== '' && readCookie(part, name) === undefined)
   return kept.length > 0 ? kept.join('; ') : undefined
 }

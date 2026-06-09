@@ -1,5 +1,5 @@
-import { createGate, type Gate, type GateOptions } from './core'
-import { envString, gateWebRequest } from './web'
+import type { Gate } from './core'
+import { type AdapterGateOptions, createGateFromEnv, envString, gateWebRequest } from './web'
 
 /**
  * The slice of the Pages Functions context this adapter touches. `env` is typed
@@ -7,7 +7,7 @@ import { envString, gateWebRequest } from './web'
  * interface with KV/D1/etc. bindings, sharing no keys with ours) still satisfies
  * it — a partial record is a TypeScript "weak type" and would reject those,
  * breaking the `export const onRequest: PagesFunction<Env> = gate()` annotation.
- * The two env vars are read by name via a cast inside `gate`.
+ * The env vars are read by name inside `gate`.
  */
 export interface PagesContext {
   request: Request
@@ -21,10 +21,7 @@ interface SitepassEnv {
   SITEPASS_BYPASS_TOKEN?: unknown
 }
 
-export type CloudflareGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
-  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number | undefined
-}
+export type CloudflareGateOptions = AdapterGateOptions
 
 /**
  * Cloudflare Pages Functions adapter. This is the universal path: it runs on the
@@ -44,13 +41,10 @@ export function gate({ maxBodyBytes, ...options }: CloudflareGateOptions = {}) {
   // reuse it (and its cached signing key) for the life of the isolate.
   let cached: Gate | undefined
   const gateFor = (rawEnv: object) => {
-    const env = rawEnv as SitepassEnv
-    cached ??= createGate({
-      ...options,
-      password: envString(env.SITEPASS_PASSWORD),
-      secret: envString(env.SITEPASS_SECRET),
-      bypassToken: options.bypassToken ?? (envString(env.SITEPASS_BYPASS_TOKEN) || undefined),
-    })
+    // A checked assignment, not an assertion: every SitepassEnv property is
+    // optional unknown, so `object` satisfies it and the compiler stays in the loop.
+    const env: SitepassEnv = rawEnv
+    cached ??= createGateFromEnv(options, (name) => envString(env[name]))
     return cached
   }
 

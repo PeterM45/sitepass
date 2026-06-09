@@ -1,11 +1,7 @@
 import type { MiddlewareHandler } from 'astro'
-import { createGate, type GateOptions } from './core'
-import { gateWebRequest } from './web'
+import { type AdapterGateOptions, createGateFromEnv, gateWebRequest } from './web'
 
-export type AstroGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
-  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number | undefined
-}
+export type AstroGateOptions = AdapterGateOptions
 
 /**
  * Astro middleware adapter.
@@ -24,12 +20,7 @@ export type AstroGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
  * Set SITEPASS_PASSWORD and SITEPASS_SECRET in the environment.
  */
 export function gate({ maxBodyBytes, ...options }: AstroGateOptions = {}): MiddlewareHandler {
-  const g = createGate({
-    ...options,
-    password: readEnv('SITEPASS_PASSWORD'),
-    secret: readEnv('SITEPASS_SECRET'),
-    bypassToken: options.bypassToken ?? (readEnv('SITEPASS_BYPASS_TOKEN') || undefined),
-  })
+  const g = createGateFromEnv(options, readEnv)
 
   return async (context, next) => (await gateWebRequest(g, context.request, maxBodyBytes)) ?? next()
 }

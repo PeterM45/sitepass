@@ -1,5 +1,4 @@
-import { createGate, type GateOptions } from './core'
-import { gateWebRequest } from './web'
+import { type AdapterGateOptions, createGateFromEnv, gateWebRequest } from './web'
 
 // `Netlify` is a global in the Edge Functions runtime; declared here so the
 // adapter typechecks without depending on @netlify/edge-functions.
@@ -10,10 +9,7 @@ export interface NetlifyContext {
   next: () => Promise<Response>
 }
 
-export type NetlifyGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
-  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number | undefined
-}
+export type NetlifyGateOptions = AdapterGateOptions
 
 /**
  * Netlify Edge Functions adapter. Like the Cloudflare adapter, it runs on the
@@ -28,12 +24,7 @@ export type NetlifyGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
  * Set SITEPASS_PASSWORD and SITEPASS_SECRET as environment variables.
  */
 export function gate({ maxBodyBytes, ...options }: NetlifyGateOptions = {}) {
-  const g = createGate({
-    ...options,
-    password: netlifyEnv('SITEPASS_PASSWORD'),
-    secret: netlifyEnv('SITEPASS_SECRET'),
-    bypassToken: options.bypassToken ?? (netlifyEnv('SITEPASS_BYPASS_TOKEN') || undefined),
-  })
+  const g = createGateFromEnv(options, netlifyEnv)
 
   return async (request: Request, context: NetlifyContext): Promise<Response> =>
     (await gateWebRequest(g, request, maxBodyBytes)) ?? context.next()
