@@ -37,10 +37,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   comments included — and written values are quoted when needed, so the
   password sitepass writes is the password the framework reads, and `init` no
   longer regenerates a secret or appends a last-wins duplicate when the file
-  uses `export` lines.
+  uses `export` lines. Upgrade note: in an existing env file, an unquoted
+  value containing `#` (e.g. `SITEPASS_PASSWORD=pw#1`, written by `init`
+  ≤ 0.2.0 or by hand) now reads truncated at the `#` — the value the
+  frameworks were already reading; wrap it in quotes to keep the `#`.
 - **CLI:** stricter argument handling: stray positionals and single-dash
-  typos are hard errors, boolean flags reject unrecognized values
-  (`--insecure-cookie=yes`), an explicit `--env-file` that does not exist is
+  typos are hard errors (`sitepass help <topic>` still prints usage), boolean
+  flags reject unrecognized values (`--insecure-cookie=yes`), a value flag
+  given bare (`--env-file` with nothing after it) is an error instead of
+  silently using the default, an explicit `--env-file` that does not exist is
   an error instead of silently starting fail-closed, `--origin` must be an
   http(s) URL at startup (previously the proxy started and then 502'd every
   request), `--port 0` reports the OS-assigned port it actually bound, and
