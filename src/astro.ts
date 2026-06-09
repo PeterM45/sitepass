@@ -28,10 +28,14 @@ export function gate({ maxBodyBytes, ...options }: AstroGateOptions = {}): Middl
 
 // Prefer Vite's import.meta.env (when sitepass is bundled into the SSR output),
 // fall back to process.env (the common case, where it runs under adapter-node).
-// Both are guarded so neither reference throws in any runtime.
+// The env read is optional-chained, not guarded with `typeof import.meta`:
+// every ESM runtime defines import.meta, so the read can't throw there, while
+// a bare import.meta reference makes the CJS build polyfill it with a
+// require('url') shim that runs on every call and throws if a consumer
+// re-bundles that file for an ESM/edge target. Without it the CJS build
+// compiles the read to a plain undefined: only process.env applies, the one
+// behavior a CJS artifact can have (Vite consumers are always ESM).
 function readEnv(name: string): string {
-  const viteEnv =
-    typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : undefined
   const fromProcess = typeof process !== 'undefined' ? process.env[name] : undefined
-  return viteEnv?.[name] ?? fromProcess ?? ''
+  return import.meta.env?.[name] ?? fromProcess ?? ''
 }
