@@ -12,7 +12,13 @@
  */
 
 export interface GateOptions {
+  /** The shared password visitors type. Empty means unconfigured: the gate fails closed. */
   password: string
+  /**
+   * Signs every session token. Use a random value of at least 16 characters
+   * (32+ bytes recommended); anything shorter counts as unconfigured and the
+   * gate fails closed. Rotating it invalidates all outstanding sessions.
+   */
   secret: string
   /** Cookie name for the session token. Default: "gate". */
   cookieName?: string
@@ -20,11 +26,45 @@ export interface GateOptions {
   sessionSeconds?: number
   /** Path that accepts the login POST and renders the login page. Default: "/__gate". */
   loginPath?: string
-  /** Exact or path-prefix matches that bypass the gate. */
-  publicPaths?: string[]
+  /** Exact or path-prefix matches that bypass the gate. Default: []. */
+  publicPaths?: readonly string[]
   /** When unconfigured, let traffic through instead of failing closed. Default: false. */
   failOpen?: boolean
-  brand?: { title?: string; subtitle?: string; accent?: string }
+  /**
+   * When set, a request whose `bypassToken` matches passes without a session.
+   * Lets CI jobs, E2E runs, and uptime monitors through the gate: adapters read
+   * it from the `x-sitepass-bypass` header. Compared in constant time.
+   */
+  bypassToken?: string
+  /**
+   * Emit the cookie's `Secure` attribute. Default: true. Only set this to false
+   * for plain-HTTP deployments (e.g. a LAN-only site behind the reverse proxy);
+   * without `Secure` the session token travels on unencrypted connections.
+   */
+  cookieSecure?: boolean
+  /** Called when a login attempt fails (wrong password). Fire-and-forget. */
+  onAuthFailure?: (request: GateRequest) => void
+  /**
+   * Replace the built-in login page. The returned HTML must POST the form to
+   * `loginPath` with a `password` input and a hidden `next` input carrying the
+   * given value, or logins will stop working. Escape `next` when interpolating.
+   */
+  renderLoginPage?: (context: {
+    loginPath: string
+    next: string
+    error: boolean
+    brand: { title: string; subtitle: string; accent: string }
+  }) => string
+  /** Login page branding. Defaults: "Protected" / "Enter the password to continue." */
+  brand?: {
+    title?: string
+    subtitle?: string
+    /**
+     * Accent color for the default page. Accepts hex, named, or rgb()/hsl()
+     * functional CSS colors; anything else silently falls back to #4f46e5.
+     */
+    accent?: string
+  }
 }
 
 export interface GateRequest {
@@ -32,11 +72,13 @@ export interface GateRequest {
   /** Pathname only, e.g. "/pricing". */
   path: string
   /** "?ref=x" or "". */
-  search?: string
+  search?: string | undefined
   /** Current value of the gate cookie, if any. */
-  cookie?: string
+  cookie?: string | undefined
+  /** Value of the `x-sitepass-bypass` header, if any. */
+  bypassToken?: string | undefined
   /** Raw request body; only needed on the login POST. */
-  body?: string
+  body?: string | undefined
 }
 
 export type GateResult =
@@ -47,12 +89,16 @@ export type GateResult =
 export interface Gate {
   handle(request: GateRequest): Promise<GateResult>
   /** Resolved cookie name, for adapters that read the request cookie. */
-  cookieName: string
+  readonly cookieName: string
   /** Resolved login path, for adapters that need to recognize it. */
-  loginPath: string
+  readonly loginPath: string
 }
 
 const DAY_SECONDS = 86400
+
+// Below this, the HMAC key is guessable enough that a single captured token
+// invites an offline brute force; treat the gate as unconfigured instead.
+const MIN_SECRET_LENGTH = 16
 
 const DEFAULT_BRAND = {
   title: 'Protected',
@@ -64,14 +110,16 @@ export function createGate(options: GateOptions): Gate {
   const cookieName = options.cookieName ?? 'gate'
   const sessionSeconds = options.sessionSeconds ?? 7 * DAY_SECONDS
   const loginPath = options.loginPath ?? '/__gate'
+  const logoutPath = `${loginPath}/logout`
   const publicPaths = options.publicPaths ?? []
   const failOpen = options.failOpen ?? false
+  const cookieSecure = options.cookieSecure ?? true
   const brand = {
     title: options.brand?.title ?? DEFAULT_BRAND.title,
     subtitle: options.brand?.subtitle ?? DEFAULT_BRAND.subtitle,
     accent: safeAccent(options.brand?.accent ?? DEFAULT_BRAND.accent),
   }
-  const configured = options.password.length > 0 && options.secret.length > 0
+  const configured = options.password.length > 0 && options.secret.length >= MIN_SECRET_LENGTH
 
   // Import the signing key once and reuse it. Lazy, so an unconfigured gate
   // never touches Web Crypto and a configured one pays the cost only on first use.
@@ -81,6 +129,16 @@ export function createGate(options: GateOptions): Gate {
     return cachedKey
   }
 
+  // A digest of the password is mixed into every token's signed message, so
+  // rotating the password (not just the secret) invalidates outstanding sessions.
+  let cachedTag: Promise<string> | undefined
+  const passwordTag = () => {
+    cachedTag ??= signingKey()
+      .then((key) => hmac(key, options.password))
+      .then(base64urlEncode)
+    return cachedTag
+  }
+
   async function handle(request: GateRequest): Promise<GateResult> {
     if (!configured) {
       // Fail closed by default: a missing password or secret must never silently
@@ -88,14 +146,22 @@ export function createGate(options: GateOptions): Gate {
       return failOpen ? { type: 'pass' } : notConfiguredPage()
     }
 
-    // The login POST is checked before publicPaths: the login path is
+    // The login POST and logout are checked before publicPaths: these paths are
     // intrinsically the gate's own, so a publicPaths entry that happens to
-    // cover it must not swallow the submission and make login impossible.
+    // cover them must not swallow the request and make login impossible.
     if (request.method.toUpperCase() === 'POST' && request.path === loginPath) {
       return handleLogin(request)
     }
 
+    if (request.path === logoutPath) {
+      return { type: 'redirect', location: '/', setCookie: sessionCookie('', 0) }
+    }
+
     if (isPublicPath(request.path, publicPaths)) {
+      return { type: 'pass' }
+    }
+
+    if (request.bypassToken !== undefined && (await isCorrectBypass(request.bypassToken))) {
       return { type: 'pass' }
     }
 
@@ -113,10 +179,15 @@ export function createGate(options: GateOptions): Gate {
     const next = sanitizeNext(form.get('next'))
 
     if (!(await isCorrectPassword(form.get('password') ?? ''))) {
+      try {
+        options.onAuthFailure?.(request)
+      } catch {
+        // A throwing observer must not turn a failed login into a crash.
+      }
       return loginPage(401, next, true)
     }
 
-    const token = await signToken(await signingKey(), nowSeconds() + sessionSeconds)
+    const token = await signToken(await signingKey(), nowSeconds() + sessionSeconds, await passwordTag())
     return { type: 'redirect', location: next, setCookie: sessionCookie(token, sessionSeconds) }
   }
 
@@ -131,25 +202,35 @@ export function createGate(options: GateOptions): Gate {
     return timingSafeEqual(expected, actual)
   }
 
+  async function isCorrectBypass(submitted: string): Promise<boolean> {
+    if (!options.bypassToken) return false
+    const key = await signingKey()
+    // Same shape as the password check: constant time, no length leak.
+    const [expected, actual] = await Promise.all([
+      hmac(key, options.bypassToken),
+      hmac(key, submitted),
+    ])
+    return timingSafeEqual(expected, actual)
+  }
+
   async function hasValidSession(token: string | undefined): Promise<boolean> {
     if (!token) return false
-    const expiry = await verifyToken(await signingKey(), token)
+    const expiry = await verifyToken(await signingKey(), token, await passwordTag())
     return expiry !== null && expiry > nowSeconds()
   }
 
   function sessionCookie(token: string, maxAge: number): string {
     // HttpOnly: not readable from JS. Secure: HTTPS only. SameSite=Lax: the
     // cookie still rides the post-login redirect GET. Path=/: covers the whole site.
-    return `${cookieName}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`
+    const secure = cookieSecure ? ' Secure;' : ''
+    return `${cookieName}=${token}; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=${maxAge}`
   }
 
   function loginPage(status: number, next: string, error: boolean): GateResult {
-    return {
-      type: 'html',
-      status,
-      body: renderLoginPage(brand, loginPath, next, error),
-      headers: htmlHeaders(),
-    }
+    const body = options.renderLoginPage
+      ? options.renderLoginPage({ loginPath, next, error, brand })
+      : renderDefaultLoginPage(brand, loginPath, next, error)
+    return { type: 'html', status, body, headers: htmlHeaders() }
   }
 
   function notConfiguredPage(): GateResult {
@@ -184,7 +265,7 @@ function htmlHeaders(): Record<string, string> {
   return { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
 }
 
-function isPublicPath(path: string, publicPaths: string[]): boolean {
+function isPublicPath(path: string, publicPaths: readonly string[]): boolean {
   // The path is matched verbatim, before any percent-decoding. A percent-encoded
   // slash (%2f) or dot-segment (%2e) can smuggle traversal past a literal prefix
   // (e.g. "/assets/..%2f..%2fsecret" matches a "/assets/" prefix yet a decoding
@@ -253,7 +334,9 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
-// --- Stateless session token: base64url(expiry) "." base64url(HMAC(expiry)) ---
+// --- Stateless session token: base64url(expiry) "." base64url(HMAC(expiry "." passwordTag)) ---
+// The password tag rides inside the signed message (not the token), so the
+// token stays the same size while a password rotation invalidates it.
 
 const encoder = new TextEncoder()
 
@@ -271,14 +354,18 @@ async function hmac(key: CryptoKey, message: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(message)))
 }
 
-async function signToken(key: CryptoKey, expiry: number): Promise<string> {
+async function signToken(key: CryptoKey, expiry: number, passwordTag: string): Promise<string> {
   const payload = String(expiry)
-  const signature = await hmac(key, payload)
+  const signature = await hmac(key, `${payload}.${passwordTag}`)
   return `${base64urlEncode(encoder.encode(payload))}.${base64urlEncode(signature)}`
 }
 
 /** Returns the encoded expiry if the signature is authentic, otherwise null. */
-async function verifyToken(key: CryptoKey, token: string): Promise<number | null> {
+async function verifyToken(
+  key: CryptoKey,
+  token: string,
+  passwordTag: string,
+): Promise<number | null> {
   const dot = token.indexOf('.')
   if (dot === -1) return null
 
@@ -293,7 +380,7 @@ async function verifyToken(key: CryptoKey, token: string): Promise<number | null
   if (signature.length !== 32) return null
 
   const payload = new TextDecoder().decode(payloadBytes)
-  const expected = await hmac(key, payload)
+  const expected = await hmac(key, `${payload}.${passwordTag}`)
   // Constant-time: a forged signature must not be distinguishable by timing.
   if (!timingSafeEqual(expected, signature)) return null
 
@@ -330,7 +417,12 @@ function base64urlDecode(value: string): Uint8Array {
 
 type Brand = { title: string; subtitle: string; accent: string }
 
-function renderLoginPage(brand: Brand, loginPath: string, next: string, error: boolean): string {
+function renderDefaultLoginPage(
+  brand: Brand,
+  loginPath: string,
+  next: string,
+  error: boolean,
+): string {
   const errorNotice = error
     ? '<p class="error" role="alert">Incorrect password. Try again.</p>'
     : ''
@@ -348,7 +440,7 @@ function renderLoginPage(brand: Brand, loginPath: string, next: string, error: b
 
 function renderNotConfiguredPage(brand: Brand): string {
   const inner = `<h1>Not configured</h1>
-      <p class="subtitle">This site is gated by sitepass, but the password or secret is not set, so the gate is failing closed. Set them and reload.</p>`
+      <p class="subtitle">This site is gated by sitepass, but the password or secret is not set (the secret must be at least 16 characters), so the gate is failing closed. Set them and reload.</p>`
   return documentShell('Not configured', brand.accent, inner)
 }
 

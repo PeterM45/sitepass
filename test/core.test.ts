@@ -146,12 +146,99 @@ describe('createGate', () => {
     expect(asRedirect(await login(g, PASSWORD, '/dashboard')).location).toBe('/dashboard')
   })
 
+  it('8b. control characters in next cannot inject headers via Location', async () => {
+    const g = gate()
+    expect(asRedirect(await login(g, PASSWORD, '/x\r\nSet-Cookie: pwned=1')).location).toBe('/')
+    expect(asRedirect(await login(g, PASSWORD, '/x\npwned')).location).toBe('/')
+    expect(asRedirect(await login(g, PASSWORD, '/x\tpwned')).location).toBe('/')
+    expect(asRedirect(await login(g, PASSWORD, '/\\evil.com')).location).toBe('/')
+  })
+
   it('9. unconfigured fails closed by default and opens only with failOpen', async () => {
     const closed = createGate({ password: '', secret: '' })
     expect(asHtml(await closed.handle({ method: 'GET', path: '/' })).status).toBe(503)
 
     const open = createGate({ password: '', secret: '', failOpen: true })
     expect((await open.handle({ method: 'GET', path: '/' })).type).toBe('pass')
+  })
+
+  it('13. rotating the password invalidates outstanding sessions', async () => {
+    const token = await mintCookie(gate())
+    const rotated = gate({ password: 'a brand new passphrase' })
+    const res = await rotated.handle({ method: 'GET', path: '/', cookie: token })
+    expect(res.type).toBe('html')
+  })
+
+  it('14. the logout path clears the cookie and works even under a publicPaths prefix', async () => {
+    const g = gate({ publicPaths: ['/__gate'] })
+    const token = await mintCookie(g)
+    const res = asRedirect(await g.handle({ method: 'GET', path: '/__gate/logout', cookie: token }))
+    expect(res.location).toBe('/')
+    expect(res.setCookie).toContain('Max-Age=0')
+    expect(readCookie(res.setCookie, g.cookieName)).toBe('')
+  })
+
+  it('15. a matching bypass token passes without a session; a wrong one does not', async () => {
+    const g = gate({ bypassToken: 'ci-bypass-token-123' })
+    const ok = await g.handle({ method: 'GET', path: '/x', bypassToken: 'ci-bypass-token-123' })
+    expect(ok.type).toBe('pass')
+    const bad = await g.handle({ method: 'GET', path: '/x', bypassToken: 'wrong' })
+    expect(bad.type).toBe('html')
+    // An unconfigured bypass never matches, even on an empty submitted value.
+    const none = await gate().handle({ method: 'GET', path: '/x', bypassToken: '' })
+    expect(none.type).toBe('html')
+  })
+
+  it('16. cookieSecure: false omits the Secure attribute; the default keeps it', async () => {
+    const insecure = gate({ cookieSecure: false })
+    expect(asRedirect(await login(insecure, PASSWORD)).setCookie).not.toContain('Secure')
+    expect(asRedirect(await login(gate(), PASSWORD)).setCookie).toContain('Secure')
+  })
+
+  it('17. a secret shorter than 16 characters counts as unconfigured and fails closed', async () => {
+    const weak = createGate({ password: PASSWORD, secret: 'abc' })
+    expect(asHtml(await weak.handle({ method: 'GET', path: '/' })).status).toBe(503)
+  })
+
+  it('18. a custom renderLoginPage replaces the built-in page', async () => {
+    const g = gate({
+      renderLoginPage: ({ loginPath, next, error }) =>
+        `<form action="${loginPath}"><input name="next" value="${next}" />${error}</form>`,
+    })
+    const res = asHtml(await g.handle({ method: 'GET', path: '/secret' }))
+    expect(res.body).toContain('action="/__gate"')
+    expect(res.body).toContain('value="/secret"')
+    expect(res.body).toContain('false')
+  })
+
+  it('19. onAuthFailure fires on a wrong password and a throwing observer is contained', async () => {
+    const seen: string[] = []
+    const g = gate({
+      onAuthFailure: (request) => {
+        seen.push(request.path)
+        throw new Error('observer blew up')
+      },
+    })
+    const res = await login(g, 'nope')
+    expect(asHtml(res).status).toBe(401)
+    expect(seen).toEqual(['/__gate'])
+    // A correct login must not fire it.
+    asRedirect(await login(g, PASSWORD))
+    expect(seen).toEqual(['/__gate'])
+  })
+
+  it('20. malformed session tokens are rejected, not thrown', async () => {
+    const g = gate()
+    const probe = async (cookie: string) =>
+      (await g.handle({ method: 'GET', path: '/', cookie })).type
+    expect(await probe('no-dot-token')).toBe('html')
+    expect(await probe('!!!.???')).toBe('html')
+    // Valid base64 but a signature that is not 32 bytes.
+    expect(await probe('MTIzNA.c2hvcnQ')).toBe('html')
+    // Correctly signed but non-numeric payload.
+    const real = await mintCookie(g)
+    const signature = real.slice(real.indexOf('.') + 1)
+    expect(await probe(`bm90LWEtbnVtYmVy.${signature}`)).toBe('html')
   })
 
   it('10. the login page HTML-escapes the next value', async () => {
