@@ -18,6 +18,27 @@ function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'sitepass-cli-'))
 }
 
+// dotenv's parse rules (the LINE regex and post-processing from dotenv@17
+// src/main.js — the parser Next, Astro dev, and wrangler use), replicated here
+// so round-trip tests prove real-world compatibility without adding a
+// dependency: quotes stripped, \n and \r expanded inside double quotes only.
+const DOTENV_LINE =
+  /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/gm
+
+function dotenvParse(src: string): Record<string, string> {
+  const parsed: Record<string, string> = {}
+  for (const match of src.replace(/\r\n?/gm, '\n').matchAll(DOTENV_LINE)) {
+    const key = match[1]
+    if (key === undefined) continue
+    let value = (match[2] ?? '').trim()
+    const maybeQuote = value[0]
+    value = value.replace(/^(['"`])([\s\S]*)\1$/gm, '$2')
+    if (maybeQuote === '"') value = value.replace(/\\n/g, '\n').replace(/\\r/g, '\r')
+    parsed[key] = value
+  }
+  return parsed
+}
+
 describe('parseFlags', () => {
   it('parses space-separated, =-separated, and boolean flags', () => {
     expect(parseFlags(['--target', 'next', '--password=pw', '--insecure-cookie'])).toEqual({
@@ -31,23 +52,39 @@ describe('parseFlags', () => {
     expect(parseFlags(['--help', '--target', 'next'])).toEqual({ help: true, target: 'next' })
   })
 
-  it('ignores stray positional tokens', () => {
-    expect(parseFlags(['stray', '--port', '8080'])).toEqual({ port: '8080' })
+  it('rejects single-dash flags, pointing at the two-dash spelling', () => {
+    expect(() => parseFlags(['-public-paths', '/admin'])).toThrow(/--public-paths/)
+    expect(() => parseFlags(['--port', '8080', '-insecure-cookie'])).toThrow(/--insecure-cookie/)
+  })
+
+  it('rejects stray positional tokens', () => {
+    expect(() => parseFlags(['stray', '--port', '8080'])).toThrow(/"stray"/)
+  })
+
+  it('still accepts flag values that start with a single dash', () => {
+    expect(parseFlags(['--password', '-pw'])).toEqual({ password: '-pw' })
   })
 })
 
 describe('flagEnabled', () => {
   it('treats the bare flag and explicit truthy values as enabled', () => {
-    expect(flagEnabled(true)).toBe(true)
-    expect(flagEnabled('')).toBe(true)
-    expect(flagEnabled('true')).toBe(true)
-    expect(flagEnabled('1')).toBe(true)
+    expect(flagEnabled('insecure-cookie', true)).toBe(true)
+    expect(flagEnabled('insecure-cookie', '')).toBe(true)
+    expect(flagEnabled('insecure-cookie', 'true')).toBe(true)
+    expect(flagEnabled('insecure-cookie', '1')).toBe(true)
   })
 
-  it('treats an explicit false / absent / other strings as disabled', () => {
-    expect(flagEnabled('false')).toBe(false)
-    expect(flagEnabled(undefined)).toBe(false)
-    expect(flagEnabled('no')).toBe(false)
+  it('treats an explicit false / 0 / absent as disabled', () => {
+    expect(flagEnabled('insecure-cookie', 'false')).toBe(false)
+    expect(flagEnabled('insecure-cookie', '0')).toBe(false)
+    expect(flagEnabled('insecure-cookie', undefined)).toBe(false)
+  })
+
+  it('rejects unrecognized spellings instead of silently disabling', () => {
+    // =yes silently meaning "Secure stays on" would recreate the login loop.
+    expect(() => flagEnabled('insecure-cookie', 'yes')).toThrow(/--insecure-cookie=true/)
+    expect(() => flagEnabled('insecure-cookie', 'TRUE')).toThrow(/"TRUE"/)
+    expect(() => flagEnabled('insecure-cookie', 'on')).toThrow(/--insecure-cookie/)
   })
 })
 
@@ -77,6 +114,42 @@ describe('upsertEnv', () => {
     // A pre-existing world-readable env file must end up 0600, not stay 0644.
     expect(statSync(path).mode & 0o777).toBe(0o600)
   })
+
+  it('updates export-prefixed lines in place, keeping the export', () => {
+    const path = join(tmp(), '.env')
+    writeFileSync(path, 'export SITEPASS_SECRET=old\nexport OTHER=keep\n')
+    upsertEnv(path, { SITEPASS_SECRET: 'new', SITEPASS_PASSWORD: 'pw' })
+    // No appended duplicate: dotenv would resolve last-wins to the wrong value.
+    expect(readFileSync(path, 'utf8')).toBe(
+      'export SITEPASS_SECRET=new\nexport OTHER=keep\nSITEPASS_PASSWORD=pw\n',
+    )
+  })
+
+  it('quotes values so dotenv and sitepass read back exactly what was written', () => {
+    const path = join(tmp(), '.env')
+    const values = [
+      'pw#secret',
+      'value # not a comment',
+      "it's",
+      'say "hi"',
+      `both ' and "`,
+      '  padded  ',
+      'pw#with\\nliteral',
+      'literal\\nstays',
+      'plain',
+    ]
+    for (const value of values) {
+      upsertEnv(path, { SITEPASS_PASSWORD: value })
+      expect(readEnvValue(path, 'SITEPASS_PASSWORD')).toBe(value)
+      expect(dotenvParse(readFileSync(path, 'utf8')).SITEPASS_PASSWORD).toBe(value)
+    }
+  })
+
+  it('rejects values no env file can represent', () => {
+    const path = join(tmp(), '.env')
+    expect(() => upsertEnv(path, { SITEPASS_PASSWORD: 'a\nb' })).toThrow(/newline/)
+    expect(() => upsertEnv(path, { SITEPASS_PASSWORD: 'a"b\'c`d' })).toThrow(/simplify/)
+  })
 })
 
 describe('readEnvValue', () => {
@@ -87,6 +160,23 @@ describe('readEnvValue', () => {
     expect(readEnvValue(path, 'B')).toBe('two words')
     expect(readEnvValue(path, 'C')).toBeUndefined()
     expect(readEnvValue(join(tmp(), 'nope'), 'A')).toBeUndefined()
+  })
+
+  it('reads export-prefixed keys, so init keeps an existing secret', () => {
+    const path = join(tmp(), '.env')
+    writeFileSync(path, 'export SITEPASS_SECRET=oldsecret-0123456789abcdef\n')
+    expect(readEnvValue(path, 'SITEPASS_SECRET')).toBe('oldsecret-0123456789abcdef')
+  })
+
+  it('strips inline comments from unquoted values the way dotenv does', () => {
+    const path = join(tmp(), '.env')
+    writeFileSync(path, 'A=value # comment\nB="kept # inside" # outside\nC=value#x\n')
+    for (const key of ['A', 'B', 'C']) {
+      expect(readEnvValue(path, key)).toBe(dotenvParse(readFileSync(path, 'utf8'))[key])
+    }
+    expect(readEnvValue(path, 'A')).toBe('value')
+    expect(readEnvValue(path, 'B')).toBe('kept # inside')
+    expect(readEnvValue(path, 'C')).toBe('value')
   })
 })
 
@@ -139,7 +229,22 @@ describe('loadDotenv', () => {
     }
   })
 
-  it('is a no-op for a missing file', () => {
-    expect(() => loadDotenv(join(tmp(), 'absent'))).not.toThrow()
+  it('loads export-prefixed keys under the bare name', () => {
+    const path = join(tmp(), '.env')
+    writeFileSync(path, 'export SITEPASS_TEST_D=exported\n')
+    try {
+      loadDotenv(path)
+      expect(process.env.SITEPASS_TEST_D).toBe('exported')
+      expect('export SITEPASS_TEST_D' in process.env).toBe(false)
+    } finally {
+      delete process.env.SITEPASS_TEST_D
+    }
+  })
+
+  it('is a no-op for a missing implicit file, but errors when required', () => {
+    const absent = join(tmp(), 'absent')
+    expect(() => loadDotenv(absent)).not.toThrow()
+    // An explicit --env-file typo must not be silently ignored.
+    expect(() => loadDotenv(absent, true)).toThrow(/Env file not found/)
   })
 })
