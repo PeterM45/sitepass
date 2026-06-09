@@ -201,12 +201,12 @@ async function forward(
   // terminator's loopback address and a hardcoded "http".
   const peer = req.socket.remoteAddress
   if (trustProxy) {
-    const chain = [headerValue(req.headers['x-forwarded-for']), peer]
+    const chain = [joinHeaderValues(req.headers['x-forwarded-for']), peer]
       .filter((part) => part !== undefined && part !== '')
       .join(', ')
     if (chain) headers.set('x-forwarded-for', chain)
-    headers.set('x-forwarded-proto', headerValue(req.headers['x-forwarded-proto']) ?? 'http')
-    const forwardedHost = headerValue(req.headers['x-forwarded-host']) ?? req.headers.host
+    headers.set('x-forwarded-proto', joinHeaderValues(req.headers['x-forwarded-proto']) ?? 'http')
+    const forwardedHost = joinHeaderValues(req.headers['x-forwarded-host']) ?? req.headers.host
     if (forwardedHost) headers.set('x-forwarded-host', forwardedHost)
   } else {
     if (peer) headers.set('x-forwarded-for', peer)
@@ -272,8 +272,10 @@ function connectionNamed(header: string | null | undefined): Set<string> {
   return named
 }
 
-/** Collapse Node's string | string[] header shape; duplicates join per RFC 9110 5.3. */
-function headerValue(value: string | string[] | undefined): string | undefined {
+// Collapse Node's string | string[] header shape; duplicates join per RFC 9110
+// 5.3. Not interchangeable with node-body's firstHeaderValue, which keeps only
+// the first duplicate (right for credentials, wrong for an X-Forwarded-For chain).
+function joinHeaderValues(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value.join(', ') : value
 }
 
