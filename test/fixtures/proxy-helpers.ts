@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http'
 import { connect } from 'node:net'
 import { readCookie } from '../../src/core'
 import { type ProxyOptions, startProxy } from '../../src/proxy'
-import { PASSWORD } from './credentials'
+import { PASSWORD, SECRET } from './credentials'
 
 /**
  * Shared harness for the proxy test files. Every server opened through it is
@@ -39,6 +39,44 @@ export function proxy(options: Omit<ProxyOptions, 'port'>): Promise<number> {
       resolve(address.port)
     })
   })
+}
+
+/**
+ * The standard fixture: an origin running `handler` behind a proxy gated with
+ * the shared credentials, plus any extra proxy options (maxBodyBytes,
+ * trustProxy, …). Both servers are tracked for closeAll().
+ */
+export async function gatedProxy(
+  handler: Parameters<typeof createServer>[1],
+  options: Omit<ProxyOptions, 'origin' | 'port' | 'password' | 'secret'> = {},
+): Promise<{ originPort: number; proxyPort: number }> {
+  const origin = await listen(handler)
+  const proxyPort = await proxy({
+    origin: `http://127.0.0.1:${origin.port}`,
+    password: PASSWORD,
+    secret: SECRET,
+    ...options,
+  })
+  return { originPort: origin.port, proxyPort }
+}
+
+/**
+ * gatedProxy whose origin records the headers of the last request it served —
+ * the forwarding tests assert on what actually reached the origin.
+ */
+export async function headerCapturingProxy(
+  options: Omit<ProxyOptions, 'origin' | 'port' | 'password' | 'secret'> = {},
+): Promise<{
+  originPort: number
+  proxyPort: number
+  headers: () => Record<string, string | string[] | undefined>
+}> {
+  let seen: Record<string, string | string[] | undefined> = {}
+  const ports = await gatedProxy((req, res) => {
+    seen = req.headers
+    res.end('OK')
+  }, options)
+  return { ...ports, headers: () => seen }
 }
 
 export async function loginCookie(port: number): Promise<string> {

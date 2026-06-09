@@ -333,6 +333,22 @@ describe('createGate', () => {
       '--accent: rgb(10 20 30 / 50%)',
     )
   })
+
+  it('24. a non-ASCII password with form-special characters round-trips end-to-end', async () => {
+    // URLSearchParams (via formBody) encodes the way a browser submits a form —
+    // '+' for spaces, percent-escaped UTF-8 — so this pins the whole
+    // decode → TextEncoder → HMAC pipeline, not just the comparison.
+    const password = 'pässwörd+&=100% 秘密'
+    const g = gate({ password })
+    const res = asRedirect(await login(g, password, '/dashboard'))
+    expect(res.location).toBe('/dashboard')
+    const token = readCookie(res.setCookie, g.cookieName)
+    expect(token).toBeTruthy()
+    // The minted cookie validates on a later request.
+    expect((await g.handle({ method: 'GET', path: '/secret', cookie: token })).type).toBe('pass')
+    // And the ASCII fixture password no longer matches this gate.
+    expect(asHtml(await login(g, PASSWORD)).status).toBe(401)
+  })
 })
 
 // The contract every adapter depends on to extract the session token.

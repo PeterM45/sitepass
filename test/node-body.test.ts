@@ -13,7 +13,7 @@ function fakeReq() {
   })
   return {
     req: emitter as unknown as IncomingMessage,
-    emit: (event: string) => emitter.emit(event),
+    emit: (event: string, arg?: unknown) => emitter.emit(event, arg),
     emitData: (chunk: string | Uint8Array) => emitter.emit('data', chunk),
   }
 }
@@ -56,6 +56,24 @@ describe('readRawBody', () => {
     emitData('done')
     emit('end')
     emit('close')
+    expect(await promise).toBe('done')
+  })
+
+  it('rejects with the socket error itself on a mid-read error (e.g. ECONNRESET)', async () => {
+    const { req, emit, emitData } = fakeReq()
+    const promise = readRawBody(req, 1024)
+    emitData('partial')
+    const boom = new Error('read ECONNRESET')
+    emit('error', boom)
+    await expect(promise).rejects.toBe(boom)
+  })
+
+  it('an error after a normal end does not reject (resolve wins)', async () => {
+    const { req, emit, emitData } = fakeReq()
+    const promise = readRawBody(req, 1024)
+    emitData('done')
+    emit('end')
+    emit('error', new Error('late socket error'))
     expect(await promise).toBe('done')
   })
 })
