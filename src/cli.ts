@@ -257,6 +257,7 @@ Usage:
                  [--public-paths <a,b>] [--login-path <path>]
                  [--cookie-name <name>] [--session-seconds <n>]
                  [--bypass-token <token>] [--insecure-cookie] [--trust-proxy]
+  sitepass --help | --version    (-h / -v, accepted on any command)
 
 init   generate a secret, write the env file, and print the wiring snippet
 proxy  run a gating reverse proxy in front of an existing origin
@@ -270,8 +271,7 @@ and always reports proto=http. Only use it when clients cannot reach the
 proxy directly.
 
 Note: Node pre-scans --env-file itself (Node >= 20.7), so when the file is
-missing a \`node dist/cli.js\`-style invocation aborts with node's own error
-before sitepass runs.
+missing the process aborts with node's own error before sitepass runs.
 
 Targets: ${TARGETS.join(', ')}`)
 }
