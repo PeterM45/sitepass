@@ -44,6 +44,11 @@ jobs:
       - run: bun run build
       - run: node scripts/smoke-dist.mjs
       - run: bunx publint
+      # Use the latest npm: older bundled versions abort provenance publishing on
+      # a Sigstore transparency-log 409 (TLOG_CREATE_ENTRY_ERROR) when npm's own
+      # retry resubmits an attestation the first request already logged. Newer
+      # npm/sigstore treats that 409 as the idempotent success it is.
+      - run: npm install -g npm@latest
       # npm (not bun) publishes with provenance; prepack runs tsup to build dist.
       - run: npm publish --provenance --access public
         env:
