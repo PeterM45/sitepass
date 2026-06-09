@@ -88,7 +88,9 @@ describe('createGate', () => {
     expect(await pass('/api/webhooks')).toBe('pass')
     expect(await pass('/api/webhooks/stripe')).toBe('pass')
     expect(await pass('/health')).toBe('pass')
-    // Must not over-match a shorter or sibling path.
+    // Must not over-match a shorter or sibling path, and the match is on whole
+    // segments: a naive startsWith would let "/api/webhooksxyz" through.
+    expect(await pass('/api/webhooksxyz')).toBe('html')
     expect(await pass('/apixyz')).toBe('html')
     expect(await pass('/api')).toBe('html')
   })

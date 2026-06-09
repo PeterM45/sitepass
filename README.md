@@ -116,7 +116,7 @@ sitepass proxy --origin http://localhost:8080 --port 8788
 
 It reads `SITEPASS_PASSWORD` and `SITEPASS_SECRET` from the environment (and `.env` if present), gates each request, and streams the origin response back on success. The origin receives `X-Forwarded-For`/`-Proto`/`-Host` derived from the connecting socket — so `-Proto` is always `http`, since the proxy itself only speaks plain HTTP. Behind a TLS terminator (Caddy, nginx), pass `--trust-proxy` (`trustProxy: true`) so the terminator's `X-Forwarded-*` reach the origin instead; enable it only when clients cannot reach the proxy directly, because it trusts whatever the connecting peer sends. The gate's own session cookie is stripped before forwarding. Gate options are available as flags — see the CLI reference below. Forwarded request bodies are buffered with a 10 MiB cap (`maxBodyBytes`), so uploads larger than that will not pass; WebSocket upgrades are not supported.
 
-The proxy is also importable for custom setups, and accepts every gate option from the Configuration section:
+The proxy is also importable for custom setups, and accepts every gate option from the Configuration section — except `maxBodyBytes`, which on the proxy caps the forwarded request body (default 10 MiB; the login body stays capped at 64 KiB):
 
 ```ts
 import { startProxy } from 'sitepass/proxy'
@@ -154,7 +154,7 @@ gate({
 })
 ```
 
-`password` and `secret` are not options on the adapters. Every adapter reads them from the environment so they never end up in your source. (The core API, `createGate`, takes them directly — see below.) `publicPaths` matches whole path segments, so `/api/webhooks` covers `/api/webhooks/stripe` but not `/apixyz`; `/` is an exact match for the root path only.
+`password` and `secret` are not options on the adapters. Every adapter reads them from the environment so they never end up in your source. (The core API, `createGate`, takes them directly — see below.) `publicPaths` matches whole path segments, so `/api/webhooks` covers `/api/webhooks/stripe` but not `/api/webhooksxyz`; `/` is an exact match for the root path only.
 
 The Bun adapter is the one exception to the factory shape: the handler comes first — `gate(myHandler, options)`.
 
@@ -211,9 +211,10 @@ sitepass proxy --origin <url> [--port <n>] [--env-file <path>]
                [--public-paths <a,b>] [--login-path <path>]
                [--cookie-name <name>] [--session-seconds <n>]
                [--bypass-token <token>] [--insecure-cookie] [--trust-proxy]
+sitepass --help | --version    (-h / -v, accepted on any command)
 ```
 
-`init` is interactive in a terminal; in scripts and CI, pass `--target` (one of `cloudflare`, `netlify`, `next`, `astro`, `sveltekit`, `express`, `hono`, `bun`). `--env-file` redirects where `init` writes and where `proxy` reads. `--insecure-cookie` drops the cookie's `Secure` attribute for plain-HTTP LAN origins — without it, browsers reject the cookie and login loops. `--trust-proxy` passes the front hop's `X-Forwarded-*` through to the origin (see the Reverse proxy section). Unknown flags are an error, never silently ignored.
+`init` is interactive in a terminal; in scripts and CI, pass `--target` (one of `cloudflare`, `netlify`, `next`, `astro`, `sveltekit`, `express`, `hono`, `bun`). `--env-file` redirects where `init` writes and where `proxy` reads — note that Node 20.7+ pre-scans `--env-file` itself, so a missing file aborts with Node's own `not found` error before sitepass's message. `--insecure-cookie` drops the cookie's `Secure` attribute for plain-HTTP LAN origins — without it, browsers reject the cookie and login loops. `--trust-proxy` passes the front hop's `X-Forwarded-*` through to the origin (see the Reverse proxy section). `--help` and `--version` win over any command, so `sitepass init --help` prints usage instead of starting an interactive init. Unknown flags are an error, never silently ignored.
 
 ## Core API (custom adapters)
 
