@@ -1,0 +1,7 @@
+// Pinned compatibility_date keeps local Workers runtime semantics stable;
+// without it `wrangler pages dev` warns and floats to today's date.
+{
+  "name": "sitepass-example-spa-cloudflare",
+  "pages_build_output_dir": "dist",
+  "compatibility_date": "2026-06-09"
+}
