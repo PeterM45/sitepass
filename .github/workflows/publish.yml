@@ -43,7 +43,8 @@ jobs:
       # Build and execute the exact artifact that ships before publishing it.
       - run: bun run build
       - run: node scripts/smoke-dist.mjs
-      - run: bunx publint
+      - run: bun run publint
+      - run: bun run attw
       # Use the latest npm: older bundled versions abort provenance publishing on
       # a Sigstore transparency-log 409 (TLOG_CREATE_ENTRY_ERROR) when npm's own
       # retry resubmits an attestation the first request already logged. Newer
