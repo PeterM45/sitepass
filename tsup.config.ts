@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup'
 
 // Keep every framework/host import out of the bundle so a consumer who installs
-// passgate for one target never pulls another's runtime. `astro:middleware` and
+// sitepass for one target never pulls another's runtime. `astro:middleware` and
 // `$env/dynamic/private` are virtual modules resolved by the host build, so they
 // must be externalized too (the regexes cover their whole families).
 const external = [
