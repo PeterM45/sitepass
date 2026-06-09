@@ -334,7 +334,12 @@ function safeAccent(accent: string): string {
     : DEFAULT_BRAND.accent
 }
 
-function escapeHtml(value: string): string {
+/**
+ * Escape a value for interpolation into HTML. Exported for `renderLoginPage`
+ * implementations, which must escape `next` (and any other request-derived
+ * value) when building their page.
+ */
+export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
