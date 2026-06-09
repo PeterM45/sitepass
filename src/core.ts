@@ -129,12 +129,16 @@ const DEFAULT_BRAND = {
  */
 export function createGate(options: GateOptions): Gate {
   const cookieName = options.cookieName ?? 'gate'
-  // Guard against a non-finite session length: NaN or Infinity would mint a
-  // token whose expiry stringifies to "NaN"/"Infinity" and never validates — a
-  // silent login loop. A finite negative just yields an already-expired token,
-  // which verifyToken handles correctly; the CLI separately rejects non-positive.
+  // Guard against a non-finite or fractional session length: NaN, Infinity, or
+  // a fraction (e.g. a value computed by division) would mint a token whose
+  // stringified expiry never validates — a silent login loop. Flooring matches
+  // the nowSeconds convention. A finite negative just yields an already-expired
+  // token, which verifyToken handles correctly; the CLI separately rejects
+  // non-positive.
   const requestedSeconds = options.sessionSeconds ?? 7 * DAY_SECONDS
-  const sessionSeconds = Number.isFinite(requestedSeconds) ? requestedSeconds : 7 * DAY_SECONDS
+  const sessionSeconds = Number.isFinite(requestedSeconds)
+    ? Math.floor(requestedSeconds)
+    : 7 * DAY_SECONDS
   const loginPath = options.loginPath ?? '/__gate'
   const logoutPath = `${loginPath}/logout`
   const publicPaths = options.publicPaths ?? []
