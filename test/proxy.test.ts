@@ -316,6 +316,55 @@ describe('reverse proxy forwarding', () => {
     expect(seen['x-forwarded-proto']).toBe('http')
   })
 
+  it('passes the front hop X-Forwarded-* through under trustProxy, appending the peer', async () => {
+    let seen: Record<string, string | string[] | undefined> = {}
+    const origin = await listen((req, res) => {
+      seen = req.headers
+      res.end('OK')
+    })
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+      trustProxy: true,
+    })
+
+    const token = await loginCookie(port)
+    await fetch(`http://127.0.0.1:${port}/x`, {
+      headers: {
+        cookie: `gate=${token}`,
+        'x-forwarded-for': '203.0.113.7',
+        'x-forwarded-proto': 'https',
+        'x-forwarded-host': 'staging.example.com',
+      },
+    })
+    // The TLS terminator's view reaches the origin: real client IP first, the
+    // terminator (here the loopback test client) appended to the chain.
+    expect(seen['x-forwarded-for']).toMatch(/^203\.0\.113\.7, .*127\.0\.0\.1/)
+    expect(seen['x-forwarded-proto']).toBe('https')
+    expect(seen['x-forwarded-host']).toBe('staging.example.com')
+  })
+
+  it('falls back to socket-derived X-Forwarded-* under trustProxy when none arrive', async () => {
+    let seen: Record<string, string | string[] | undefined> = {}
+    const origin = await listen((req, res) => {
+      seen = req.headers
+      res.end('OK')
+    })
+    const port = await proxy({
+      origin: `http://127.0.0.1:${origin.port}`,
+      password: PASSWORD,
+      secret: SECRET,
+      trustProxy: true,
+    })
+
+    const token = await loginCookie(port)
+    await fetch(`http://127.0.0.1:${port}/x`, { headers: { cookie: `gate=${token}` } })
+    expect(seen['x-forwarded-for']).toContain('127.0.0.1')
+    expect(seen['x-forwarded-proto']).toBe('http')
+    expect(seen['x-forwarded-host']).toBe(`127.0.0.1:${port}`)
+  })
+
   it('drops the Cookie header entirely when the gate cookie was the only one', async () => {
     let seen: Record<string, string | string[] | undefined> = {}
     const origin = await listen((req, res) => {

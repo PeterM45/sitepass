@@ -26,6 +26,7 @@ const KNOWN_FLAGS: Record<'init' | 'proxy', readonly string[]> = {
     'session-seconds',
     'bypass-token',
     'insecure-cookie',
+    'trust-proxy',
     'help',
     'version',
   ],
@@ -203,6 +204,10 @@ function runProxy(flags: Flags) {
     // --insecure-cookie drops the Secure attribute for plain-HTTP (LAN) use;
     // without it, browsers reject the cookie and login silently loops.
     cookieSecure: flagEnabled('insecure-cookie', flags['insecure-cookie']) ? false : undefined,
+    // --trust-proxy passes the front hop's X-Forwarded-* through to the origin
+    // (for a TLS terminator in front of the proxy); only safe when clients
+    // cannot reach the proxy directly, so it stays off by default.
+    trustProxy: flagEnabled('trust-proxy', flags['trust-proxy']),
   })
   // Only announce success once the socket is actually bound, and surface a bind
   // failure (e.g. port in use) instead of a false banner followed by a crash.
@@ -251,7 +256,7 @@ Usage:
   sitepass proxy --origin <url> [--port <n>] [--env-file <path>]
                  [--public-paths <a,b>] [--login-path <path>]
                  [--cookie-name <name>] [--session-seconds <n>]
-                 [--bypass-token <token>] [--insecure-cookie]
+                 [--bypass-token <token>] [--insecure-cookie] [--trust-proxy]
 
 init   generate a secret, write the env file, and print the wiring snippet
 proxy  run a gating reverse proxy in front of an existing origin
@@ -259,6 +264,10 @@ proxy  run a gating reverse proxy in front of an existing origin
 The proxy reads SITEPASS_PASSWORD, SITEPASS_SECRET, and SITEPASS_BYPASS_TOKEN
 from the environment (and the --env-file, default .env). --insecure-cookie
 drops the cookie's Secure attribute for plain-HTTP (LAN) origins.
+--trust-proxy passes the front hop's X-Forwarded-* through to the origin (for
+a TLS terminator in front of the proxy); without it the proxy overwrites them
+and always reports proto=http. Only use it when clients cannot reach the
+proxy directly.
 
 Note: Node pre-scans --env-file itself (Node >= 20.7), so when the file is
 missing a \`node dist/cli.js\`-style invocation aborts with node's own error

@@ -90,7 +90,9 @@ describe('flagEnabled', () => {
 
 describe('rejectUnknownFlags', () => {
   it('accepts known flags and rejects typos with the known list', () => {
-    expect(() => rejectUnknownFlags('proxy', { origin: 'http://x', port: '1' })).not.toThrow()
+    expect(() =>
+      rejectUnknownFlags('proxy', { origin: 'http://x', port: '1', 'trust-proxy': true }),
+    ).not.toThrow()
     expect(() => rejectUnknownFlags('proxy', { 'public-path': 'a' })).toThrow(/--public-path\b/)
     expect(() => rejectUnknownFlags('init', { origin: 'http://x' })).toThrow(/--origin/)
   })
