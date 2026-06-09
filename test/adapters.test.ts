@@ -6,12 +6,13 @@ import { NextRequest } from 'next/server'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { gate as astroGate } from '../src/astro'
 import { gate as bunGate } from '../src/bun'
-import { createGate, type GateOptions, readCookie } from '../src/core'
+import { createGate, readCookie } from '../src/core'
 import { gate as expressGate } from '../src/express'
 import { gate as honoGate } from '../src/hono'
-import { gate as netlifyGate } from '../src/netlify'
+import { config as netlifyConfig, gate as netlifyGate } from '../src/netlify'
 import { gate as nextGate } from '../src/next'
 import { gate as svelteGate } from '../src/sveltekit'
+import type { AdapterGateOptions } from '../src/web'
 import { PASSWORD, SECRET } from './fixtures/credentials'
 import express4 from './fixtures/express4'
 
@@ -58,7 +59,6 @@ function asResponse(value: unknown): Response {
   return value
 }
 
-type AdapterOptions = Omit<GateOptions, 'password' | 'secret'> & { maxBodyBytes?: number }
 type Drive = (path: string, init?: RequestInit) => Promise<Response>
 
 /**
@@ -69,7 +69,7 @@ type Drive = (path: string, init?: RequestInit) => Promise<Response>
  */
 function describeAdapterConformance(
   name: string,
-  makeDrive: (options?: AdapterOptions) => Drive | Promise<Drive>,
+  makeDrive: (options?: AdapterGateOptions) => Drive | Promise<Drive>,
   expectPass: (res: Response) => Promise<void> = async (res) => {
     expect(await res.text()).toBe('DOWNSTREAM')
   },
@@ -84,6 +84,16 @@ function describeAdapterConformance(
       const res = await drive('/secret')
       expect(res.status).toBe(401)
       expect((await res.text()).toLowerCase()).toContain('password')
+    })
+
+    it('gates HEAD and OPTIONS like GET: 401 without a cookie', async () => {
+      // Deliberate contract: bodiless verbs get the same 401 as GET. Notably a
+      // CORS preflight OPTIONS to a gated API carries no cookie, so it receives
+      // the 401 login response rather than reaching the app's CORS handler.
+      for (const method of ['HEAD', 'OPTIONS']) {
+        const res = await drive('/secret', { method })
+        expect(res.status).toBe(401)
+      }
     })
 
     it('passes through with a valid cookie', async () => {
@@ -281,4 +291,53 @@ describeAdapterConformance('netlify', (options) => {
   type Context = Parameters<typeof handle>[1]
   const ctx = { next: DOWNSTREAM } as Context
   return (path, init) => handle(req(path, init), ctx)
+})
+
+describe('hono adapter env sources', () => {
+  it('prefers c.env bindings over process.env (the Workers path)', async () => {
+    const app = new Hono()
+    app.use(honoGate())
+    app.all('*', (c) => c.text('DOWNSTREAM'))
+    // process.env (set at the top of this file) holds different credentials, so
+    // a login with the bindings password only succeeds if the bindings won.
+    const bindings = { SITEPASS_PASSWORD: 'bindings-only-password', SITEPASS_SECRET: SECRET }
+    const res = await app.request(
+      '/__gate',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: `password=${encodeURIComponent('bindings-only-password')}&next=/`,
+      },
+      bindings,
+    )
+    expect(res.status).toBe(302)
+    expect(readCookie(res.headers.get('set-cookie'), 'gate')).toBeTruthy()
+    // The process.env password no longer matches under bindings credentials.
+    const wrong = await app.request('/__gate', postForm, bindings)
+    expect(wrong.status).toBe(401)
+  })
+})
+
+describe('netlify adapter outside the Edge runtime', () => {
+  it('fails closed with the 503 not-configured page when the Netlify global is absent', async () => {
+    const globals = globalThis as Record<string, unknown>
+    const saved = globals.Netlify
+    delete globals.Netlify
+    try {
+      const handle = netlifyGate()
+      type Context = Parameters<typeof handle>[1]
+      const res = await handle(req('/secret'), { next: DOWNSTREAM } as Context)
+      expect(res.status).toBe(503)
+    } finally {
+      globals.Netlify = saved
+    }
+  })
+
+  it('publishes config.path with its leading-slash literal type', () => {
+    // Compile-time regression check: Netlify's Config types path as `/${string}`,
+    // so a widened `string` here would break `export const config: Config = …`
+    // in a consumer's typed edge function.
+    const path: `/${string}` = netlifyConfig.path
+    expect(path).toBe('/*')
+  })
 })
