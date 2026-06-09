@@ -21,6 +21,7 @@
       },
       "peerDependencies": {
         "@sveltejs/kit": ">=2",
+        "@types/express": ">=4",
         "astro": ">=4",
         "express": ">=4",
         "hono": ">=4",
@@ -28,6 +29,7 @@
       },
       "optionalPeers": [
         "@sveltejs/kit",
+        "@types/express",
         "astro",
         "express",
         "hono",
