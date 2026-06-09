@@ -197,15 +197,15 @@ The form must POST to `loginPath` with a `password` input and the hidden `next` 
 
 ### Watching failed logins
 
-`onAuthFailure` fires on every wrong-password attempt — wire it to your logging or alerting (a `POST <loginPath>` returning 401 in your access logs is the same signal, ready for fail2ban):
+`onAuthFailure` fires on every wrong-password attempt — wire it to your logging or alerting (a `POST <loginPath>` returning 401 in your access logs is the same signal, ready for fail2ban). It receives only a redacted `{ method, path }` view, never the submitted password or the session cookie, so logging it can't persist credentials:
 
 ```ts
-gate({ onAuthFailure: () => console.warn('sitepass: failed login attempt') })
+gate({ onAuthFailure: ({ path }) => console.warn(`sitepass: failed login at ${path}`) })
 ```
 
 ## CLI reference
 
-```
+```text
 sitepass init  [--target <name>] [--password <pw>] [--env-file <path>]
 sitepass proxy --origin <url> [--port <n>] [--env-file <path>]
                [--public-paths <a,b>] [--login-path <path>]

@@ -21,12 +21,14 @@ Heads-up for upgraders, two deliberate behavior changes:
 
 ### Security
 
-- **Core:** `publicPaths` matching now rejects literal dot-segments and
-  backslash segments, closing the remaining traversal route: the reverse proxy
-  and Express adapters pass the raw request target into the gate, so
-  `/assets/../secret` matched an `/assets` prefix verbatim while resolving
-  elsewhere at the origin. (The percent-encoded form was fixed in 0.1.1; the
-  edge adapters were never affected because `URL` normalizes the pathname.)
+- **Core:** `publicPaths` matching now rejects literal dot-segments, backslash,
+  and path-parameter (`;`) segments, plus their encoded forms (`%2e`, `%2f`,
+  `%5c`, `%3b`, and a stray `%25` that a double-decoding origin could unwrap),
+  closing the remaining traversal route: the reverse proxy and Express adapters
+  pass the raw request target into the gate, so `/assets/../secret` matched an
+  `/assets` prefix verbatim while resolving elsewhere at the origin. (The basic
+  encoded form was fixed in 0.1.1; the edge adapters were never affected because
+  `URL` normalizes the pathname.)
 - **Core:** a `publicPaths` entry of `/` is now an exact match on the root
   path. Previously it un-gated the entire site, because trailing-slash
   normalization reduced it to a prefix that matched every path. Empty entries
@@ -80,7 +82,9 @@ Heads-up for upgraders, two deliberate behavior changes:
   (localization, logos), plus an exported `escapeHtml` helper for safe
   interpolation.
 - **`onAuthFailure` option:** an observer called on every failed login
-  attempt, for fail2ban-style logging on platforms without access logs.
+  attempt, for fail2ban-style logging on platforms without access logs. It
+  receives only a redacted `{ method, path }` view — never the submitted
+  password or session cookie — so wiring it to logs can't persist credentials.
 - **`cookieSecure: false` option** (and the proxy's `--insecure-cookie` flag)
   for plain-HTTP LAN deployments, which previously failed as a silent login
   loop.

@@ -25,9 +25,12 @@ const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024
 const LOGIN_BODY_LIMIT = 64 * 1024
 
 // Headers the client must not control: the gate's own bypass credential, and the
-// forwarded-request metadata, which a front-most proxy sets authoritatively.
+// forwarded-request metadata, which a front-most proxy sets authoritatively. The
+// RFC 7239 `Forwarded` header is dropped (not re-emitted) so a client can't poison
+// a downstream that trusts it; we set only the X-Forwarded-* family.
 const CLIENT_CONTROLLED = new Set([
   'x-sitepass-bypass',
+  'forwarded',
   'x-forwarded-for',
   'x-forwarded-proto',
   'x-forwarded-host',
