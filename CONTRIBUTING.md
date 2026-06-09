@@ -40,10 +40,12 @@ If a file feels over-built, it is. Delete until it is obvious.
 
 ## The adapter contract
 
-Every adapter does the same three steps and should be short enough to read at a glance:
+Every adapter does the same three steps:
 
-1. **Normalize.** Build a `GateRequest` from the host's request: method, pathname, search string, the gate cookie value, and the raw body only when it is a POST to the login path.
+1. **Normalize.** Build a `GateRequest` from the host's request: method, pathname, search string, the gate cookie value, the `x-sitepass-bypass` header, and the raw body only when it is a POST to the login path.
 2. **Handle.** `await gate.handle(request)`.
 3. **Translate.** Map the `GateResult`: `pass` continues to the app (`next()` or the wrapped handler), `redirect` becomes a 302 with `Location` and `Set-Cookie`, `html` becomes a response with the given status, body, and headers.
 
-Each adapter reads `SITEPASS_PASSWORD` and `SITEPASS_SECRET` from its own environment and passes them into `createGate`. The core never reads environment variables. When adding an adapter, pull the framework's current middleware docs first and match how that framework writes middleware.
+For hosts that speak web `Request`/`Response` this is already written: `src/web.ts` (internal, not a package export) does normalize + translate with a capped login-body read, so those adapters reduce to reading their environment and calling `gateWebRequest(g, request, maxBodyBytes) ?? next()`. The Node-side consumers (Express, the proxy) share the capped body readers in `src/node-body.ts`. New adapters should reuse these instead of re-implementing the plumbing — and add a `describeAdapterConformance` driver in `test/adapters.test.ts`, which buys the full conformance suite (login, cookie pass, body cap, logout, bypass) for ~10 lines.
+
+Each adapter reads `SITEPASS_PASSWORD`, `SITEPASS_SECRET`, and `SITEPASS_BYPASS_TOKEN` from its own environment and passes them into `createGate`. The core never reads environment variables. When adding an adapter, pull the framework's current middleware docs first and match how that framework writes middleware.
