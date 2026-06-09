@@ -24,6 +24,11 @@
     "next",
     "astro",
     "sveltekit",
+    "express",
+    "hono",
+    "bun",
+    "password-protection",
+    "staging",
     "deployment-protection"
   ],
   "engines": {
@@ -159,7 +164,8 @@
     "astro": ">=4",
     "express": ">=4",
     "hono": ">=4",
-    "next": ">=13"
+    "next": ">=13",
+    "@types/express": ">=4"
   },
   "peerDependenciesMeta": {
     "@sveltejs/kit": {
@@ -175,6 +181,9 @@
       "optional": true
     },
     "next": {
+      "optional": true
+    },
+    "@types/express": {
       "optional": true
     }
   },
