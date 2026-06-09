@@ -4,6 +4,72 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Express:** middleware failures now go to `next(error)` instead of
+  rejecting the middleware promise. Express 4 does not route a rejected
+  promise to error handlers, so one unauthenticated client opening a login
+  `POST` and dropping the socket mid-body crashed the whole process as an
+  unhandled rejection (Express 5 was unaffected). The adapter conformance
+  suite now runs against both majors.
+- **Reverse proxy:** headers named by the inbound `Connection` header are
+  dropped in both directions (RFC 7230 §6.1), so `Connection: x-foo` cannot
+  smuggle `x-foo` past the static hop-by-hop list. Defense in depth: no
+  working smuggle was demonstrated, since undici re-frames the forwarded
+  request.
+
+### Fixed
+
+- **Core:** a fractional `sessionSeconds` (e.g. a value computed by division)
+  minted a session token that never validated, so login succeeded and
+  immediately bounced back to the login page, forever. The value is now
+  floored.
+- **Core:** the built-in login page is accessible: the failed-login notice is
+  tied to the password input with `aria-describedby`/`aria-invalid` (a
+  server-rendered `role="alert"` is never announced), the error and
+  input-border colors meet WCAG AA contrast in both color schemes, and the
+  page declares `color-scheme` and uses `100dvh` so it renders correctly in
+  dark mode and under mobile dynamic toolbars.
+- **CLI:** env files are parsed the way dotenv (Next, Astro dev, wrangler)
+  parses them — `export ` prefixes, quoted values, and unquoted inline
+  comments included — and written values are quoted when needed, so the
+  password sitepass writes is the password the framework reads, and `init` no
+  longer regenerates a secret or appends a last-wins duplicate when the file
+  uses `export` lines.
+- **CLI:** stricter argument handling: stray positionals and single-dash
+  typos are hard errors, boolean flags reject unrecognized values
+  (`--insecure-cookie=yes`), an explicit `--env-file` that does not exist is
+  an error instead of silently starting fail-closed, `--origin` must be an
+  http(s) URL at startup (previously the proxy started and then 502'd every
+  request), `--port 0` reports the OS-assigned port it actually bound, and
+  `init` says so when it skips `.gitignore` outside a git root.
+- **Netlify:** the published type of `config.path` keeps Netlify's
+  `` `/${string}` `` template literal, so `export const config: Config = …`
+  typechecks in a Deno-checked edge function.
+- **Docs:** the README's `publicPaths` example now actually demonstrates
+  segment matching (`/api/webhooks` covers `/api/webhooks/stripe` but not
+  `/api/webhooksxyz`), the proxy section spells out that its `maxBodyBytes`
+  is the forwarded-body cap (10 MiB default) rather than the adapters'
+  64 KiB login cap, the CLI reference documents `--help`/`--version`
+  (`-h`/`-v`) and Node's own `--env-file` pre-scan, `.env.example` lists the
+  optional `SITEPASS_BYPASS_TOKEN`, and the public types (`GateResult`,
+  `Gate`, `ProxyOptions`, the adapter option aliases, the netlify `config`)
+  carry hover docs.
+- **Examples:** spa-cloudflare depends on `sitepass ^0.2.0` (a `^0.1` range
+  never resolves to 0.2.x), pins a wrangler `compatibility_date`, and its
+  README warns that plain `vite dev` serves the SPA ungated.
+
+### Added
+
+- **Reverse proxy: `trustProxy` option and `--trust-proxy` flag** for
+  deployments behind a TLS terminator: the front hop's `X-Forwarded-*` pass
+  through to the origin (the peer is appended to the `For` chain) instead of
+  being overwritten with the terminator's loopback address and `proto=http`.
+  Off by default — only enable it when clients cannot reach the proxy
+  directly.
+
 ## [0.2.0] - 2026-06-09
 
 A minor (not patch) release because of the two behavior changes below — `^0.1`
@@ -148,6 +214,7 @@ particular anyone using the Express adapter or the `sitepass init` CLI.
 
 Initial release.
 
+[Unreleased]: https://github.com/PeterM45/sitepass/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/PeterM45/sitepass/releases/tag/v0.2.0
 [0.1.1]: https://github.com/PeterM45/sitepass/releases/tag/v0.1.1
 [0.1.0]: https://www.npmjs.com/package/sitepass/v/0.1.0
