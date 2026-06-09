@@ -5,17 +5,16 @@ import { NextRequest } from 'next/server'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { gate as astroGate } from '../src/astro'
 import { gate as bunGate } from '../src/bun'
-import { createGate, readCookie } from '../src/core'
+import { createGate, type GateOptions, readCookie } from '../src/core'
 import { gate as expressGate } from '../src/express'
 import { gate as honoGate } from '../src/hono'
 import { gate as netlifyGate } from '../src/netlify'
 import { gate as nextGate } from '../src/next'
 import { gate as svelteGate } from '../src/sveltekit'
+import { PASSWORD, SECRET } from './fixtures/credentials'
 
 // Every adapter reads SITEPASS_* from the environment when gate() is called, so
 // set them before any adapter is constructed. netlify reads a `Netlify` global.
-const PASSWORD = 'correct horse battery staple'
-const SECRET = 'a-test-secret-that-is-plenty-long-1234567890'
 process.env.SITEPASS_PASSWORD = PASSWORD
 process.env.SITEPASS_SECRET = SECRET
 ;(globalThis as Record<string, unknown>).Netlify = {
@@ -23,6 +22,7 @@ process.env.SITEPASS_SECRET = SECRET
 }
 
 const loginBody = `password=${encodeURIComponent(PASSWORD)}&next=/`
+const BYPASS = 'ci-bypass-token-for-tests'
 
 // A token minted by core with the shared secret is accepted by every adapter,
 // since each adapter builds its gate with the same SITEPASS_SECRET.
@@ -56,238 +56,156 @@ function asResponse(value: unknown): Response {
   return value
 }
 
-describe('next adapter', () => {
-  const handle = nextGate()
-  // NextRequest uses Next's own RequestInit (signal cannot be null), so type the
-  // init against the constructor rather than the global RequestInit.
-  type NextInit = ConstructorParameters<typeof NextRequest>[1]
-  const nreq = (path: string, init?: NextInit) => new NextRequest(`https://app.test${path}`, init)
-  const nextLogin: NextInit = {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: loginBody,
-  }
+type AdapterOptions = Omit<GateOptions, 'password' | 'secret'> & { maxBodyBytes?: number }
+type Drive = (path: string, init?: RequestInit) => Promise<Response>
 
-  it('serves the login page without a cookie', async () => {
-    const res = await handle(nreq('/secret'))
-    expect(res.status).toBe(401)
-    expect((await res.text()).toLowerCase()).toContain('password')
+/**
+ * The conformance contract every adapter must satisfy. Each adapter supplies
+ * only a driver factory (how to build the gate with options and feed it a
+ * request) and, when a pass is not visible as a DOWNSTREAM body, a custom
+ * pass assertion (Next signals pass via the x-middleware-next header).
+ */
+function describeAdapterConformance(
+  name: string,
+  makeDrive: (options?: AdapterOptions) => Drive | Promise<Drive>,
+  expectPass: (res: Response) => Promise<void> = async (res) => {
+    expect(await res.text()).toBe('DOWNSTREAM')
+  },
+) {
+  describe(`${name} adapter`, () => {
+    let drive: Drive
+    beforeAll(async () => {
+      drive = await makeDrive()
+    })
+
+    it('serves the login page without a cookie', async () => {
+      const res = await drive('/secret')
+      expect(res.status).toBe(401)
+      expect((await res.text()).toLowerCase()).toContain('password')
+    })
+
+    it('passes through with a valid cookie', async () => {
+      await expectPass(await drive('/secret', { headers: { cookie: `gate=${TOKEN}` } }))
+    })
+
+    it('mints a cookie on correct login that then passes', async () => {
+      const res = await drive('/__gate', postForm)
+      expect(res.status).toBe(302)
+      const token = readCookie(res.headers.get('set-cookie'), 'gate')
+      expect(token).toBeTruthy()
+      await expectPass(await drive('/secret', { headers: { cookie: `gate=${token}` } }))
+    })
+
+    it('rejects an oversized login body with 413 instead of buffering it', async () => {
+      // An unauthenticated POST to the login path must not buffer an unbounded
+      // body; the default cap is 64 KiB, so a ~128 KiB body fails closed.
+      const res = await drive('/__gate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: `password=${'a'.repeat(128 * 1024)}`,
+      })
+      expect(res.status).toBe(413)
+    })
+
+    it('logout clears the session cookie and redirects', async () => {
+      const res = await drive('/__gate/logout', { headers: { cookie: `gate=${TOKEN}` } })
+      expect(res.status).toBe(302)
+      expect(res.headers.get('set-cookie')).toContain('Max-Age=0')
+    })
+
+    it('lets a matching bypass token through and rejects a wrong one', async () => {
+      const bypassed = await makeDrive({ bypassToken: BYPASS })
+      await expectPass(await bypassed('/secret', { headers: { 'x-sitepass-bypass': BYPASS } }))
+      const wrong = await bypassed('/secret', { headers: { 'x-sitepass-bypass': 'nope' } })
+      expect(wrong.status).toBe(401)
+    })
   })
+}
 
-  it('passes through with a valid cookie', async () => {
-    const res = await handle(nreq('/secret', { headers: { cookie: `gate=${TOKEN}` } }))
+const DOWNSTREAM = async () => new Response('DOWNSTREAM')
+
+describeAdapterConformance(
+  'next',
+  (options) => {
+    const handle = nextGate(options)
+    return (path, init) =>
+      handle(
+        new NextRequest(
+          `https://app.test${path}`,
+          init as ConstructorParameters<typeof NextRequest>[1],
+        ),
+      )
+  },
+  async (res) => {
     expect(res.headers.get('x-middleware-next')).toBe('1')
-  })
+  },
+)
 
-  it('mints a cookie on correct login that then passes', async () => {
-    const res = await handle(nreq('/__gate', nextLogin))
-    expect(res.status).toBe(302)
-    const token = readCookie(res.headers.get('set-cookie'), 'gate')
-    expect(token).toBeTruthy()
-    const pass = await handle(nreq('/secret', { headers: { cookie: `gate=${token}` } }))
-    expect(pass.headers.get('x-middleware-next')).toBe('1')
-  })
-})
-
-describe('hono adapter', () => {
+describeAdapterConformance('hono', (options) => {
   const app = new Hono()
-  app.use(honoGate())
+  app.use(honoGate(options))
   app.all('*', (c) => c.text('DOWNSTREAM'))
-
-  it('serves the login page without a cookie', async () => {
-    const res = await app.request('/secret')
-    expect(res.status).toBe(401)
-    expect((await res.text()).toLowerCase()).toContain('password')
-  })
-
-  it('passes through with a valid cookie', async () => {
-    const res = await app.request('/secret', { headers: { cookie: `gate=${TOKEN}` } })
-    expect(await res.text()).toBe('DOWNSTREAM')
-  })
-
-  it('mints a cookie on correct login that then passes', async () => {
-    const res = await app.request('/__gate', postForm)
-    expect(res.status).toBe(302)
-    const token = readCookie(res.headers.get('set-cookie'), 'gate')
-    expect(token).toBeTruthy()
-    const pass = await app.request('/secret', { headers: { cookie: `gate=${token}` } })
-    expect(await pass.text()).toBe('DOWNSTREAM')
-  })
+  return async (path, init) => app.request(path, init)
 })
 
-describe('express adapter', () => {
-  let server: Server
-  let base: string
-  beforeAll(async () => {
-    const app = express()
-    app.use(expressGate())
-    app.get('/secret', (_req, res) => {
-      res.send('DOWNSTREAM')
-    })
-    await new Promise<void>((resolve) => {
-      server = app.listen(0, '127.0.0.1', () => resolve())
-    })
-    const address = server.address()
-    if (address === null || typeof address === 'string') throw new Error('no port')
-    base = `http://127.0.0.1:${address.port}`
-  })
-  afterAll(() => server?.close())
-
-  it('serves the login page without a cookie', async () => {
-    const res = await fetch(`${base}/secret`, { redirect: 'manual' })
-    expect(res.status).toBe(401)
-    expect((await res.text()).toLowerCase()).toContain('password')
-  })
-
-  it('passes through with a valid cookie', async () => {
-    const res = await fetch(`${base}/secret`, { headers: { cookie: `gate=${TOKEN}` } })
-    expect(res.status).toBe(200)
-    expect(await res.text()).toBe('DOWNSTREAM')
-  })
-
-  it('mints a cookie on correct login that then passes', async () => {
-    const res = await fetch(`${base}/__gate`, { ...postForm, redirect: 'manual' })
-    expect(res.status).toBe(302)
-    const token = readCookie(res.headers.get('set-cookie'), 'gate')
-    expect(token).toBeTruthy()
-    const pass = await fetch(`${base}/secret`, { headers: { cookie: `gate=${token}` } })
-    expect(await pass.text()).toBe('DOWNSTREAM')
-  })
-
-  it('rejects an oversized login body with 413 instead of buffering it', async () => {
-    // An unauthenticated POST to the login path must not buffer an unbounded body;
-    // the default cap is 64 KiB, so a ~128 KiB body fails closed with 413.
-    const huge = `password=${'a'.repeat(128 * 1024)}`
-    const res = await fetch(`${base}/__gate`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: huge,
-      redirect: 'manual',
-    })
-    expect(res.status).toBe(413)
-  })
+const servers: Server[] = []
+afterAll(async () => {
+  await Promise.all(
+    servers.map((server) => new Promise((resolve) => server.close(() => resolve(undefined)))),
+  )
 })
 
-describe('bun adapter', () => {
-  const handle = bunGate(async () => new Response('DOWNSTREAM'))
-
-  it('serves the login page without a cookie', async () => {
-    const res = await handle(req('/secret'))
-    expect(res.status).toBe(401)
-    expect((await res.text()).toLowerCase()).toContain('password')
+describeAdapterConformance('express', async (options) => {
+  const app = express()
+  app.use(expressGate(options))
+  app.all('/{*path}', (_req, res) => {
+    res.send('DOWNSTREAM')
   })
-
-  it('passes through with a valid cookie', async () => {
-    const res = await handle(req('/secret', { headers: { cookie: `gate=${TOKEN}` } }))
-    expect(await res.text()).toBe('DOWNSTREAM')
+  const server = await new Promise<Server>((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s))
   })
-
-  it('mints a cookie on correct login that then passes', async () => {
-    const res = await handle(req('/__gate', postForm))
-    expect(res.status).toBe(302)
-    const token = readCookie(res.headers.get('set-cookie'), 'gate')
-    expect(token).toBeTruthy()
-    const pass = await handle(req('/secret', { headers: { cookie: `gate=${token}` } }))
-    expect(await pass.text()).toBe('DOWNSTREAM')
-  })
+  servers.push(server)
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('no port')
+  const base = `http://127.0.0.1:${address.port}`
+  return (path, init) => fetch(`${base}${path}`, { ...init, redirect: 'manual' })
 })
 
-describe('astro adapter', () => {
-  const onRequest = astroGate()
+describeAdapterConformance('bun', (options) => {
+  const handle = bunGate(DOWNSTREAM, options)
+  return (path, init) => handle(req(path, init))
+})
+
+describeAdapterConformance('astro', (options) => {
+  const onRequest = astroGate(options)
   type Context = Parameters<typeof onRequest>[0]
   type Next = Parameters<typeof onRequest>[1]
-  const next = (async () => new Response('DOWNSTREAM')) as unknown as Next
-  const ctx = (path: string, init?: RequestInit, cookie?: string): Context =>
-    ({
+  const next = DOWNSTREAM as unknown as Next
+  return async (path, init) => {
+    const context = {
       request: req(path, init),
       url: new URL(`https://app.test${path}`),
-      cookies: {
-        get: (name: string) => (cookie && name === 'gate' ? { value: cookie } : undefined),
-      },
-    }) as unknown as Context
-
-  it('serves the login page without a cookie', async () => {
-    const res = asResponse(await onRequest(ctx('/secret'), next))
-    expect(res.status).toBe(401)
-    expect((await res.text()).toLowerCase()).toContain('password')
-  })
-
-  it('passes through with a valid cookie', async () => {
-    const res = asResponse(await onRequest(ctx('/secret', undefined, TOKEN), next))
-    expect(await res.text()).toBe('DOWNSTREAM')
-  })
-
-  it('mints a cookie on correct login that then passes', async () => {
-    const res = asResponse(await onRequest(ctx('/__gate', postForm), next))
-    expect(res.status).toBe(302)
-    const token = readCookie(res.headers.get('set-cookie'), 'gate')
-    expect(token).toBeTruthy()
-    const pass = asResponse(await onRequest(ctx('/secret', undefined, token ?? ''), next))
-    expect(await pass.text()).toBe('DOWNSTREAM')
-  })
+    } as unknown as Context
+    return asResponse(await onRequest(context, next))
+  }
 })
 
-describe('sveltekit adapter', () => {
-  const handle = svelteGate()
+describeAdapterConformance('sveltekit', (options) => {
+  const handle = svelteGate(options)
   type HandleArg = Parameters<typeof handle>[0]
-  const resolve = (async () => new Response('DOWNSTREAM')) as unknown as HandleArg['resolve']
-  const event = (path: string, init?: RequestInit, cookie?: string): HandleArg =>
-    ({
-      event: {
-        request: req(path, init),
-        url: new URL(`https://app.test${path}`),
-        cookies: { get: (name: string) => (cookie && name === 'gate' ? cookie : undefined) },
-      },
-      resolve,
-    }) as unknown as HandleArg
-
-  it('serves the login page without a cookie', async () => {
-    const res = asResponse(await handle(event('/secret')))
-    expect(res.status).toBe(401)
-    expect((await res.text()).toLowerCase()).toContain('password')
-  })
-
-  it('passes through with a valid cookie', async () => {
-    const res = asResponse(await handle(event('/secret', undefined, TOKEN)))
-    expect(await res.text()).toBe('DOWNSTREAM')
-  })
-
-  it('mints a cookie on correct login that then passes', async () => {
-    const res = asResponse(await handle(event('/__gate', postForm)))
-    expect(res.status).toBe(302)
-    const token = readCookie(res.headers.get('set-cookie'), 'gate')
-    expect(token).toBeTruthy()
-    const pass = asResponse(await handle(event('/secret', undefined, token ?? '')))
-    expect(await pass.text()).toBe('DOWNSTREAM')
-  })
+  const resolve = DOWNSTREAM as unknown as HandleArg['resolve']
+  return async (path, init) => {
+    const event = {
+      request: req(path, init),
+      url: new URL(`https://app.test${path}`),
+    } as unknown as HandleArg['event']
+    return asResponse(await handle({ event, resolve } as HandleArg))
+  }
 })
 
-describe('netlify adapter', () => {
-  const handle = netlifyGate()
-  type NetlifyContext = Parameters<typeof handle>[1]
-  const ctx = (cookie?: string): NetlifyContext =>
-    ({
-      next: async () => new Response('DOWNSTREAM'),
-      cookies: { get: (name: string) => (cookie && name === 'gate' ? cookie : undefined) },
-    }) as unknown as NetlifyContext
-
-  it('serves the login page without a cookie', async () => {
-    const res = await handle(req('/secret'), ctx())
-    expect(res.status).toBe(401)
-    expect((await res.text()).toLowerCase()).toContain('password')
-  })
-
-  it('passes through with a valid cookie', async () => {
-    const res = await handle(req('/secret'), ctx(TOKEN))
-    expect(await res.text()).toBe('DOWNSTREAM')
-  })
-
-  it('mints a cookie on correct login that then passes', async () => {
-    const res = await handle(req('/__gate', postForm), ctx())
-    expect(res.status).toBe(302)
-    const token = readCookie(res.headers.get('set-cookie'), 'gate')
-    expect(token).toBeTruthy()
-    const pass = await handle(req('/secret'), ctx(token ?? ''))
-    expect(await pass.text()).toBe('DOWNSTREAM')
-  })
+describeAdapterConformance('netlify', (options) => {
+  const handle = netlifyGate(options)
+  type Context = Parameters<typeof handle>[1]
+  const ctx = { next: DOWNSTREAM } as Context
+  return (path, init) => handle(req(path, init), ctx)
 })

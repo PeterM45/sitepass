@@ -1,4 +1,19 @@
 import { createGate, type GateOptions } from './core'
+import { gateWebRequest } from './web'
+
+// `Netlify` is a global in the Edge Functions runtime; declared here so the
+// adapter typechecks without depending on @netlify/edge-functions.
+declare const Netlify: { env: { get(key: string): string | undefined } }
+
+/** The slice of the Netlify Edge Functions context this adapter touches. */
+export interface NetlifyContext {
+  next: () => Promise<Response>
+}
+
+export type NetlifyGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
+  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
+  maxBodyBytes?: number
+}
 
 /**
  * Netlify Edge Functions adapter. Like the Cloudflare adapter, it runs on the
@@ -12,47 +27,22 @@ import { createGate, type GateOptions } from './core'
  *
  * Set SITEPASS_PASSWORD and SITEPASS_SECRET as environment variables.
  */
-
-// `Netlify` is a global in the Edge Functions runtime; declared here so the
-// adapter typechecks without depending on @netlify/edge-functions.
-declare const Netlify: { env: { get(key: string): string | undefined } }
-
-interface NetlifyContext {
-  next: () => Promise<Response>
-  cookies: { get(name: string): string | undefined }
-}
-
-export function gate(options: Omit<GateOptions, 'password' | 'secret'> = {}) {
+export function gate({ maxBodyBytes, ...options }: NetlifyGateOptions = {}) {
   const g = createGate({
     ...options,
-    password: Netlify.env.get('SITEPASS_PASSWORD') ?? '',
-    secret: Netlify.env.get('SITEPASS_SECRET') ?? '',
+    password: netlifyEnv('SITEPASS_PASSWORD'),
+    secret: netlifyEnv('SITEPASS_SECRET'),
   })
 
-  return async (request: Request, context: NetlifyContext): Promise<Response> => {
-    const url = new URL(request.url)
-    const isLoginPost = request.method.toUpperCase() === 'POST' && url.pathname === g.loginPath
+  return async (request: Request, context: NetlifyContext): Promise<Response> =>
+    (await gateWebRequest(g, request, maxBodyBytes)) ?? context.next()
+}
 
-    const result = await g.handle({
-      method: request.method,
-      path: url.pathname,
-      search: url.search,
-      cookie: context.cookies.get(g.cookieName),
-      body: isLoginPost ? await request.text() : undefined,
-    })
-
-    switch (result.type) {
-      case 'pass':
-        return context.next()
-      case 'redirect':
-        return new Response(null, {
-          status: 302,
-          headers: { Location: result.location, 'Set-Cookie': result.setCookie },
-        })
-      case 'html':
-        return new Response(result.body, { status: result.status, headers: result.headers })
-    }
-  }
+// Guarded: outside the Edge runtime (tests, an accidental shared-module import)
+// the global is absent; fail closed via the gate's own 503 page instead of
+// crashing with a ReferenceError that names no fix.
+function netlifyEnv(name: string): string {
+  return typeof Netlify === 'undefined' ? '' : (Netlify.env.get(name) ?? '')
 }
 
 // Run on every path. Re-export this from your edge function file.

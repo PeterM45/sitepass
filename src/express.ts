@@ -1,5 +1,15 @@
-import type { NextFunction, Request, Response } from 'express'
+import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import { createGate, type GateOptions, readCookie } from './core'
+import { BodyTooLargeError, readRawBody } from './node-body'
+
+export type ExpressGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
+  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
+  maxBodyBytes?: number
+}
+
+// A login form body (next + password) is tiny; 64 KiB is generous headroom while
+// keeping an unauthenticated POST to the login path from buffering without bound.
+const DEFAULT_MAX_BODY_BYTES = 64 * 1024
 
 /**
  * Express middleware adapter.
@@ -12,22 +22,10 @@ import { createGate, type GateOptions, readCookie } from './core'
  *
  * Set SITEPASS_PASSWORD and SITEPASS_SECRET in the environment.
  */
-export type ExpressGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
-  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number
-}
-
-// A login form body (next + password) is tiny; 64 KiB is generous headroom while
-// keeping an unauthenticated POST to the login path from buffering without bound.
-const DEFAULT_MAX_BODY_BYTES = 64 * 1024
-
-// Thrown by readRawBody when the login body exceeds maxBodyBytes; mapped to 413.
-class BodyTooLargeError extends Error {}
-
 export function gate({
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   ...options
-}: ExpressGateOptions = {}) {
+}: ExpressGateOptions = {}): RequestHandler {
   const g = createGate({
     ...options,
     password: process.env.SITEPASS_PASSWORD ?? '',
@@ -64,6 +62,7 @@ export function gate({
       path,
       search,
       cookie: readCookie(req.headers.cookie, g.cookieName),
+      bypassToken: headerValue(req.headers['x-sitepass-bypass']),
       body,
     })
 
@@ -81,32 +80,6 @@ export function gate({
   }
 }
 
-// Read the raw request body directly so the adapter does not depend on
-// express.urlencoded being mounted ahead of it. Capped at maxBodyBytes: an
-// unauthenticated POST to the login path must not buffer an unbounded body.
-function readRawBody(req: Request, limit: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = ''
-    let size = 0
-    let done = false
-    req.setEncoding('utf8')
-    req.on('data', (chunk: string) => {
-      if (done) return
-      size += Buffer.byteLength(chunk)
-      if (size > limit) {
-        // Stop accumulating and apply TCP backpressure; the caller sends a 413.
-        done = true
-        req.pause()
-        reject(new BodyTooLargeError())
-        return
-      }
-      data += chunk
-    })
-    req.on('end', () => {
-      if (!done) resolve(data)
-    })
-    req.on('error', (error) => {
-      if (!done) reject(error)
-    })
-  })
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
 }

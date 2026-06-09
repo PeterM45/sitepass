@@ -1,5 +1,11 @@
 import type { MiddlewareHandler } from 'astro'
 import { createGate, type GateOptions } from './core'
+import { gateWebRequest } from './web'
+
+export type AstroGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
+  /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
+  maxBodyBytes?: number
+}
 
 /**
  * Astro middleware adapter.
@@ -17,37 +23,14 @@ import { createGate, type GateOptions } from './core'
  *
  * Set SITEPASS_PASSWORD and SITEPASS_SECRET in the environment.
  */
-export function gate(options: Omit<GateOptions, 'password' | 'secret'> = {}): MiddlewareHandler {
+export function gate({ maxBodyBytes, ...options }: AstroGateOptions = {}): MiddlewareHandler {
   const g = createGate({
     ...options,
     password: readEnv('SITEPASS_PASSWORD'),
     secret: readEnv('SITEPASS_SECRET'),
   })
 
-  return async (context, next) => {
-    const { request, url } = context
-    const isLoginPost = request.method.toUpperCase() === 'POST' && url.pathname === g.loginPath
-
-    const result = await g.handle({
-      method: request.method,
-      path: url.pathname,
-      search: url.search,
-      cookie: context.cookies.get(g.cookieName)?.value,
-      body: isLoginPost ? await request.text() : undefined,
-    })
-
-    switch (result.type) {
-      case 'pass':
-        return next()
-      case 'redirect':
-        return new Response(null, {
-          status: 302,
-          headers: { Location: result.location, 'Set-Cookie': result.setCookie },
-        })
-      case 'html':
-        return new Response(result.body, { status: result.status, headers: result.headers })
-    }
-  }
+  return async (context, next) => (await gateWebRequest(g, context.request, maxBodyBytes)) ?? next()
 }
 
 // Prefer Vite's import.meta.env (when sitepass is bundled into the SSR output),
