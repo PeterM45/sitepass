@@ -334,3 +334,28 @@ describe('createGate', () => {
     )
   })
 })
+
+// The contract every adapter depends on to extract the session token.
+describe('readCookie', () => {
+  it('returns undefined for a missing header or a jar without the cookie', () => {
+    expect(readCookie(undefined, 'gate')).toBeUndefined()
+    expect(readCookie(null, 'gate')).toBeUndefined()
+    expect(readCookie('', 'gate')).toBeUndefined()
+    expect(readCookie('other=1; theme=dark', 'gate')).toBeUndefined()
+  })
+
+  it('matches the whole cookie name, not a prefix', () => {
+    expect(readCookie('gateway=x; gate=y', 'gate')).toBe('y')
+    expect(readCookie('gateway=x', 'gate')).toBeUndefined()
+  })
+
+  it('skips valueless parts and trims whitespace around name and value', () => {
+    expect(readCookie('flag; gate=y', 'gate')).toBe('y')
+    expect(readCookie(' gate = y ', 'gate')).toBe('y')
+  })
+
+  it('returns the value verbatim, including embedded "="', () => {
+    expect(readCookie('gate=a=b', 'gate')).toBe('a=b')
+    expect(readCookie('gate=', 'gate')).toBe('')
+  })
+})
