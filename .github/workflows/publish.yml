@@ -40,17 +40,23 @@ jobs:
       - run: bun run typecheck
       - run: bun run check
       - run: node ./node_modules/.bin/vitest run
-      # Build and execute the exact artifact that ships before publishing it.
       - run: bun run build
-      - run: node scripts/smoke-dist.mjs
       - run: bun run publint
       - run: bun run attw
-      # Use the latest npm: older bundled versions abort provenance publishing on
-      # a Sigstore transparency-log 409 (TLOG_CREATE_ENTRY_ERROR) when npm's own
-      # retry resubmits an attestation the first request already logged. Newer
-      # npm/sigstore treats that 409 as the idempotent success it is.
-      - run: npm install -g npm@latest
-      # npm (not bun) publishes with provenance; prepack runs tsup to build dist.
-      - run: npm publish --provenance --access public
+      # Pack once with scripts disabled (prepack would otherwise rebuild dist
+      # after validation), smoke-test that exact tarball, then publish the same
+      # file: npm runs no build scripts when publishing a tarball, so the bytes
+      # that were validated are the bytes that ship.
+      - run: npm pack --ignore-scripts
+      - run: node scripts/smoke-dist.mjs ./sitepass-*.tgz
+      # Pinned npm (the version that published v0.2.0) instead of a floating
+      # @latest with the publish token. It must stay new enough to treat the
+      # Sigstore transparency-log 409 (TLOG_CREATE_ENTRY_ERROR) as the
+      # idempotent success it is — the runner's bundled npm aborts provenance
+      # publishing when npm's own retry resubmits an attestation the first
+      # request already logged.
+      - run: npm install -g npm@11.16.0
+      # npm (not bun) publishes with provenance.
+      - run: npm publish ./sitepass-*.tgz --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
