@@ -88,12 +88,15 @@ export function createGate(options: GateOptions): Gate {
       return failOpen ? { type: 'pass' } : notConfiguredPage()
     }
 
-    if (isPublicPath(request.path, publicPaths)) {
-      return { type: 'pass' }
-    }
-
+    // The login POST is checked before publicPaths: the login path is
+    // intrinsically the gate's own, so a publicPaths entry that happens to
+    // cover it must not swallow the submission and make login impossible.
     if (request.method.toUpperCase() === 'POST' && request.path === loginPath) {
       return handleLogin(request)
+    }
+
+    if (isPublicPath(request.path, publicPaths)) {
+      return { type: 'pass' }
     }
 
     if (await hasValidSession(request.cookie)) {
@@ -188,7 +191,19 @@ function isPublicPath(path: string, publicPaths: string[]): boolean {
   // origin resolves it elsewhere). Real public asset paths never contain those, so
   // treat any such path as non-public and let it fall through to the gate.
   if (/%2[ef]/i.test(path)) return false
+  // Same idea for literal dot-segments and backslashes: the edge adapters hand
+  // over a URL-normalized pathname, but the reverse proxy and Express pass the
+  // raw request target, where "/assets/../secret" matches an "/assets" prefix
+  // verbatim yet resolves elsewhere at the origin.
+  for (const segment of path.split('/')) {
+    if (segment === '.' || segment === '..' || segment.includes('\\')) return false
+  }
   return publicPaths.some((entry) => {
+    // "/" must stay an exact match on the root: stripping its trailing slash
+    // would leave an empty base whose prefix check matches every path and
+    // silently un-gates the whole site. Empty entries are ignored outright.
+    if (entry === '') return false
+    if (entry === '/') return path === '/'
     // Match on whole path segments so "/api/webhooks" covers "/api/webhooks/stripe"
     // but not "/apixyz".
     const base = entry.endsWith('/') ? entry.slice(0, -1) : entry

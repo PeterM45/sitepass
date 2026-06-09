@@ -106,6 +106,39 @@ describe('createGate', () => {
     expect(await probe('/assets/%2e%2e/secret')).toBe('html')
   })
 
+  it('7c. a literal dot-segment cannot smuggle traversal past a publicPaths prefix', async () => {
+    const g = gate({ publicPaths: ['/assets'] })
+    const probe = async (path: string) => (await g.handle({ method: 'GET', path })).type
+    // The reverse proxy and Express hand over the raw request target, so the
+    // literal forms must be rejected just like the encoded ones.
+    expect(await probe('/assets/../secret')).toBe('html')
+    expect(await probe('/assets/./../secret')).toBe('html')
+    expect(await probe('/assets/..\\secret')).toBe('html')
+    // A trailing-slash entry behaves the same as its bare form.
+    const slash = gate({ publicPaths: ['/assets/'] })
+    expect((await slash.handle({ method: 'GET', path: '/assets/app.css' })).type).toBe('pass')
+    expect((await slash.handle({ method: 'GET', path: '/assets' })).type).toBe('pass')
+    expect((await slash.handle({ method: 'GET', path: '/assets/../secret' })).type).toBe('html')
+  })
+
+  it('7d. a "/" or empty publicPaths entry does not un-gate the whole site', async () => {
+    const g = gate({ publicPaths: ['/'] })
+    expect((await g.handle({ method: 'GET', path: '/' })).type).toBe('pass')
+    expect((await g.handle({ method: 'GET', path: '/secret' })).type).toBe('html')
+
+    const empty = gate({ publicPaths: [''] })
+    expect((await empty.handle({ method: 'GET', path: '/secret' })).type).toBe('html')
+  })
+
+  it('7e. a publicPaths entry covering loginPath does not break login', async () => {
+    // "The login page must be public" is a natural misconfiguration; the login
+    // POST must still be handled by the gate, not passed through to the app.
+    const g = gate({ publicPaths: ['/__gate'] })
+    const res = asRedirect(await login(g, PASSWORD, '/dashboard'))
+    expect(res.location).toBe('/dashboard')
+    expect(readCookie(res.setCookie, g.cookieName)).toBeTruthy()
+  })
+
   it('8. open-redirect attempts fall back to "/" while a safe next is preserved', async () => {
     const g = gate()
     expect(asRedirect(await login(g, PASSWORD, '//evil.com')).location).toBe('/')
