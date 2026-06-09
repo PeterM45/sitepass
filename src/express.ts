@@ -4,7 +4,7 @@ import { BodyTooLargeError, readRawBody } from './node-body'
 
 export type ExpressGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
   /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number
+  maxBodyBytes?: number | undefined
 }
 
 // A login form body (next + password) is tiny; 64 KiB is generous headroom while
@@ -30,6 +30,7 @@ export function gate({
     ...options,
     password: process.env.SITEPASS_PASSWORD ?? '',
     secret: process.env.SITEPASS_SECRET ?? '',
+    bypassToken: options.bypassToken ?? process.env.SITEPASS_BYPASS_TOKEN,
   })
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {

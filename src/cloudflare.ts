@@ -9,13 +9,17 @@ import { envString, gateWebRequest } from './web'
  */
 export interface PagesContext {
   request: Request
-  env: { SITEPASS_PASSWORD?: unknown; SITEPASS_SECRET?: unknown }
+  env: {
+    SITEPASS_PASSWORD?: unknown
+    SITEPASS_SECRET?: unknown
+    SITEPASS_BYPASS_TOKEN?: unknown
+  }
   next: () => Promise<Response>
 }
 
 export type CloudflareGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
   /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number
+  maxBodyBytes?: number | undefined
 }
 
 /**
@@ -40,6 +44,7 @@ export function gate({ maxBodyBytes, ...options }: CloudflareGateOptions = {}) {
       ...options,
       password: envString(env.SITEPASS_PASSWORD),
       secret: envString(env.SITEPASS_SECRET),
+      bypassToken: options.bypassToken ?? (envString(env.SITEPASS_BYPASS_TOKEN) || undefined),
     })
     return cached
   }

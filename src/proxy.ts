@@ -149,9 +149,9 @@ async function forward(
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD'
   const upstream = await fetch(target, {
-    method: req.method,
+    method: req.method ?? 'GET',
     headers,
-    body: hasBody ? await readRawBuffer(req, maxBodyBytes) : undefined,
+    ...(hasBody ? { body: await readRawBuffer(req, maxBodyBytes) } : {}),
     redirect: 'manual',
     signal: controller.signal,
   })

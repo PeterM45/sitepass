@@ -4,7 +4,7 @@ import { gateWebRequest } from './web'
 
 export type AstroGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
   /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number
+  maxBodyBytes?: number | undefined
 }
 
 /**
@@ -28,6 +28,7 @@ export function gate({ maxBodyBytes, ...options }: AstroGateOptions = {}): Middl
     ...options,
     password: readEnv('SITEPASS_PASSWORD'),
     secret: readEnv('SITEPASS_SECRET'),
+    bypassToken: options.bypassToken ?? (readEnv('SITEPASS_BYPASS_TOKEN') || undefined),
   })
 
   return async (context, next) => (await gateWebRequest(g, context.request, maxBodyBytes)) ?? next()

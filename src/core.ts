@@ -21,50 +21,55 @@ export interface GateOptions {
    */
   secret: string
   /** Cookie name for the session token. Default: "gate". */
-  cookieName?: string
+  cookieName?: string | undefined
   /** Session length in seconds. Default: 7 days. */
-  sessionSeconds?: number
+  sessionSeconds?: number | undefined
   /** Path that accepts the login POST and renders the login page. Default: "/__gate". */
-  loginPath?: string
+  loginPath?: string | undefined
   /** Exact or path-prefix matches that bypass the gate. Default: []. */
-  publicPaths?: readonly string[]
+  publicPaths?: readonly string[] | undefined
   /** When unconfigured, let traffic through instead of failing closed. Default: false. */
-  failOpen?: boolean
+  failOpen?: boolean | undefined
   /**
    * When set, a request whose `bypassToken` matches passes without a session.
    * Lets CI jobs, E2E runs, and uptime monitors through the gate: adapters read
-   * it from the `x-sitepass-bypass` header. Compared in constant time.
+   * it from the `x-sitepass-bypass` header (and the SITEPASS_BYPASS_TOKEN
+   * environment variable). Compared in constant time.
    */
-  bypassToken?: string
+  bypassToken?: string | undefined
   /**
    * Emit the cookie's `Secure` attribute. Default: true. Only set this to false
    * for plain-HTTP deployments (e.g. a LAN-only site behind the reverse proxy);
    * without `Secure` the session token travels on unencrypted connections.
    */
-  cookieSecure?: boolean
+  cookieSecure?: boolean | undefined
   /** Called when a login attempt fails (wrong password). Fire-and-forget. */
-  onAuthFailure?: (request: GateRequest) => void
+  onAuthFailure?: ((request: GateRequest) => void) | undefined
   /**
    * Replace the built-in login page. The returned HTML must POST the form to
    * `loginPath` with a `password` input and a hidden `next` input carrying the
    * given value, or logins will stop working. Escape `next` when interpolating.
    */
-  renderLoginPage?: (context: {
-    loginPath: string
-    next: string
-    error: boolean
-    brand: { title: string; subtitle: string; accent: string }
-  }) => string
+  renderLoginPage?:
+    | ((context: {
+        loginPath: string
+        next: string
+        error: boolean
+        brand: { title: string; subtitle: string; accent: string }
+      }) => string)
+    | undefined
   /** Login page branding. Defaults: "Protected" / "Enter the password to continue." */
-  brand?: {
-    title?: string
-    subtitle?: string
-    /**
-     * Accent color for the default page. Accepts hex, named, or rgb()/hsl()
-     * functional CSS colors; anything else silently falls back to #4f46e5.
-     */
-    accent?: string
-  }
+  brand?:
+    | {
+        title?: string | undefined
+        subtitle?: string | undefined
+        /**
+         * Accent color for the default page. Accepts hex, named, or rgb()/hsl()
+         * functional CSS colors; anything else silently falls back to #4f46e5.
+         */
+        accent?: string | undefined
+      }
+    | undefined
 }
 
 export interface GateRequest {
@@ -187,7 +192,11 @@ export function createGate(options: GateOptions): Gate {
       return loginPage(401, next, true)
     }
 
-    const token = await signToken(await signingKey(), nowSeconds() + sessionSeconds, await passwordTag())
+    const token = await signToken(
+      await signingKey(),
+      nowSeconds() + sessionSeconds,
+      await passwordTag(),
+    )
     return { type: 'redirect', location: next, setCookie: sessionCookie(token, sessionSeconds) }
   }
 

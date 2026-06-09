@@ -5,7 +5,7 @@ import { gateWebRequest } from './web'
 
 export type SvelteKitGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
   /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number
+  maxBodyBytes?: number | undefined
 }
 
 /**
@@ -26,6 +26,7 @@ export function gate({ maxBodyBytes, ...options }: SvelteKitGateOptions = {}): H
     ...options,
     password: env.SITEPASS_PASSWORD ?? '',
     secret: env.SITEPASS_SECRET ?? '',
+    bypassToken: options.bypassToken ?? env.SITEPASS_BYPASS_TOKEN,
   })
 
   return async ({ event, resolve }) =>

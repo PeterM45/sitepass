@@ -5,7 +5,7 @@ import { gateWebRequest } from './web'
 
 export type NextGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
   /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number
+  maxBodyBytes?: number | undefined
 }
 
 /**
@@ -29,6 +29,7 @@ export function gate({ maxBodyBytes, ...options }: NextGateOptions = {}) {
     ...options,
     password: process.env.SITEPASS_PASSWORD ?? '',
     secret: process.env.SITEPASS_SECRET ?? '',
+    bypassToken: options.bypassToken ?? process.env.SITEPASS_BYPASS_TOKEN,
   })
 
   return async (request: NextRequest): Promise<Response> => {

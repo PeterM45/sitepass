@@ -13,7 +13,7 @@ export type FetchHandler<A extends unknown[] = unknown[]> = (
 
 export type BunGateOptions = Omit<GateOptions, 'password' | 'secret'> & {
   /** Max bytes read from the login POST body before responding 413. Default: 64 KiB. */
-  maxBodyBytes?: number
+  maxBodyBytes?: number | undefined
 }
 
 /**
@@ -34,6 +34,7 @@ export function gate<A extends unknown[]>(
     ...options,
     password: process.env.SITEPASS_PASSWORD ?? '',
     secret: process.env.SITEPASS_SECRET ?? '',
+    bypassToken: options.bypassToken ?? process.env.SITEPASS_BYPASS_TOKEN,
   })
 
   return async (request, ...args) =>
