@@ -1,0 +1,18 @@
+# Keeps the SHA-pinned actions fresh (Dependabot updates the pin and the
+# version comment together) and surfaces dev-dependency updates. The published
+# package has zero runtime dependencies, so npm updates only touch the
+# toolchain.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dev-dependencies:
+        patterns:
+          - '*'

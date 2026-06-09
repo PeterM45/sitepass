@@ -1,7 +1,11 @@
 name: CI
 
+# Run PR branches once (via pull_request), not twice; pushes to main and tags
+# still get their own run.
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
 
 # Least privilege: the workflow only reads the repo. Raise per-job if a step ever
@@ -9,14 +13,25 @@ on:
 permissions:
   contents: read
 
+# A superseded push cancels the still-running CI for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # Actions are pinned to commit SHAs (not mutable tags) so a retagged or
       # compromised release can't silently change what runs in CI.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      # Pin Node for the coverage gate too: v8 coverage output shifts between
+      # Node majors, and the runner's system Node changes when images rotate.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run check
@@ -36,6 +51,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
