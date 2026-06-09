@@ -226,6 +226,7 @@
     "@vitest/coverage-v8": "4.1.7",
     "astro": "^6.4.2",
     "express": "^5.2.1",
+    "express4": "npm:express@^4",
     "hono": "^4.12.23",
     "next": "^16.2.6",
     "svelte": "^5.56.0",
