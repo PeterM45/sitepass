@@ -275,6 +275,8 @@ describe('reverse proxy forwarding', () => {
         cookie: `other=1; gate=${token}; theme=dark`,
         'x-custom': 'kept',
         'x-sitepass-bypass': 'secret-bypass',
+        'proxy-authorization': 'Basic should-be-stripped',
+        forwarded: 'for=9.9.9.9;host=evil.com',
       },
     })
     expect(res.status).toBe(200)
@@ -285,9 +287,11 @@ describe('reverse proxy forwarding', () => {
     expect(seen.cookie).toBe('other=1; theme=dark')
     // The bypass credential is stripped too — it must not leak to origin logs.
     expect(seen['x-sitepass-bypass']).toBeUndefined()
-    // Ordinary headers pass through; connection-specific ones do not.
+    // Ordinary headers pass through; hop-by-hop and the RFC 7239 Forwarded
+    // header (which we don't re-emit) do not.
     expect(seen['x-custom']).toBe('kept')
     expect(seen['proxy-authorization']).toBeUndefined()
+    expect(seen.forwarded).toBeUndefined()
     // Forwarded-request metadata names the real client (Node may report the
     // loopback as the IPv4-mapped IPv6 form ::ffff:127.0.0.1).
     expect(seen['x-forwarded-for']).toContain('127.0.0.1')

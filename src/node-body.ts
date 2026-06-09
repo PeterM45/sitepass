@@ -29,11 +29,11 @@ export function readRawBody(req: IncomingMessage, limit: number): Promise<string
       data += chunk
     })
     req.on('end', () => {
-      if (!done) resolve(data)
+      if (done) return
+      done = true
+      resolve(data)
     })
-    req.on('error', (error) => {
-      if (!done) reject(error)
-    })
+    settleOnAbort(req, () => done, reject)
   })
 }
 
@@ -55,11 +55,30 @@ export function readRawBuffer(req: IncomingMessage, limit: number): Promise<Uint
       chunks.push(chunk)
     })
     req.on('end', () => {
-      if (!done) resolve(concat(chunks))
+      if (done) return
+      done = true
+      resolve(concat(chunks))
     })
-    req.on('error', (error) => {
-      if (!done) reject(error)
-    })
+    settleOnAbort(req, () => done, reject)
+  })
+}
+
+// Reject on error, or on an abort/close that arrives without an 'error' event:
+// a client dropping mid-upload commonly emits 'aborted'/'close' alone, which
+// would otherwise leave the read promise pending and hang the request.
+function settleOnAbort(
+  req: IncomingMessage,
+  isDone: () => boolean,
+  reject: (error: Error) => void,
+) {
+  req.on('error', (error) => {
+    if (!isDone()) reject(error)
+  })
+  req.on('aborted', () => {
+    if (!isDone()) reject(new Error('request aborted before the body was fully read'))
+  })
+  req.on('close', () => {
+    if (!isDone()) reject(new Error('request closed before the body was fully read'))
   })
 }
 

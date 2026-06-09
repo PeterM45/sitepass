@@ -39,4 +39,5 @@ body:
     attributes:
       value: >
         **Security issues:** please do not file them here — use the private
-        reporting channel described in [SECURITY.md](../blob/main/SECURITY.md).
+        reporting channel described in
+        [SECURITY.md](https://github.com/PeterM45/sitepass/blob/main/SECURITY.md).

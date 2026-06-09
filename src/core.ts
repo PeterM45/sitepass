@@ -41,8 +41,13 @@ export interface GateOptions {
    * without `Secure` the session token travels on unencrypted connections.
    */
   cookieSecure?: boolean | undefined
-  /** Called when a login attempt fails (wrong password). Fire-and-forget. */
-  onAuthFailure?: ((request: GateRequest) => void) | undefined
+  /**
+   * Called when a login attempt fails (wrong password). Fire-and-forget, and
+   * receives only a redacted `{ method, path }` view — never the submitted
+   * password or the session cookie — so wiring it to logs can't persist
+   * credentials.
+   */
+  onAuthFailure?: ((info: AuthFailure) => void) | undefined
   /**
    * Replace the built-in login page. The returned HTML must POST the form to
    * `loginPath` with a `password` input and a hidden `next` input carrying the
@@ -68,6 +73,13 @@ export interface GateOptions {
         accent?: string | undefined
       }
     | undefined
+}
+
+/** Redacted view of a failed login, passed to `onAuthFailure`. */
+export interface AuthFailure {
+  method: string
+  /** Pathname only, e.g. "/__gate". */
+  path: string
 }
 
 export interface GateRequest {
@@ -198,7 +210,9 @@ export function createGate(options: GateOptions): Gate {
 
     if (!(await isCorrectPassword(form.get('password') ?? ''))) {
       try {
-        options.onAuthFailure?.(request)
+        // Redacted on purpose: the hook must never see the submitted password
+        // or the session cookie, since it is the natural place to wire logging.
+        options.onAuthFailure?.({ method: request.method, path: request.path })
       } catch {
         // A throwing observer must not turn a failed login into a crash.
       }
@@ -292,10 +306,11 @@ function isPublicPath(path: string, publicPaths: readonly string[]): boolean {
   // separator can smuggle traversal past a literal prefix (e.g.
   // "/assets/..%2f..%2fsecret" matches a "/assets/" prefix yet a decoding origin
   // resolves it elsewhere). Reject any encoded dot (%2e), slash (%2f), backslash
-  // (%5c), or a stray percent (%25 and friends, which a double-decoding origin
-  // could unwrap into one of the above). Real public asset paths contain none of
-  // these, so treat such a path as non-public and let it fall through to the gate.
-  if (/%(2[ef]|5c|25)/i.test(path)) return false
+  // (%5c), semicolon (%3b, which an origin may decode into a "..;" path-parameter
+  // traversal), or a stray percent (%25 and friends, which a double-decoding
+  // origin could unwrap into one of the above). Real public asset paths contain
+  // none of these, so treat such a path as non-public and fall through to the gate.
+  if (/%(2[ef]|5c|3b|25)/i.test(path)) return false
   // Same idea for literal dot-segments, backslashes, and path-parameter (";")
   // segments: the edge adapters hand over a URL-normalized pathname, but the
   // reverse proxy and Express pass the raw request target, where "/assets/../secret"

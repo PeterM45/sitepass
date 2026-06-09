@@ -180,7 +180,7 @@ function runProxy(flags: Flags) {
     }
   }
 
-  startProxy({
+  const server = startProxy({
     origin,
     port,
     password,
@@ -197,7 +197,16 @@ function runProxy(flags: Flags) {
     // without it, browsers reject the cookie and login silently loops.
     cookieSecure: flagEnabled(flags['insecure-cookie']) ? false : undefined,
   })
-  console.log(`sitepass proxy listening on http://localhost:${port} -> ${origin}`)
+  // Only announce success once the socket is actually bound, and surface a bind
+  // failure (e.g. port in use) instead of a false banner followed by a crash.
+  server.on('listening', () => {
+    console.log(`sitepass proxy listening on http://localhost:${port} -> ${origin}`)
+  })
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    const detail = error.code === 'EADDRINUSE' ? ` (port ${port} is already in use)` : ''
+    console.error(`sitepass proxy failed to start${detail}: ${error.message}`)
+    process.exitCode = 1
+  })
 }
 
 async function resolveTarget(flags: Flags): Promise<Target> {
@@ -365,10 +374,29 @@ async function prompt(question: string): Promise<string> {
   }
 }
 
+// Parse one KEY=VALUE env line into [key, value], tolerating whitespace around
+// the '=' and optional surrounding quotes. Returns null for blanks, comments,
+// and non-assignments. Shared by readEnvValue/upsertEnv/loadDotenv so all three
+// agree on what counts as a key (e.g. `SITEPASS_SECRET = "..."`).
+function parseEnvLine(line: string): [string, string] | null {
+  const trimmed = line.trim()
+  if (trimmed === '' || trimmed.startsWith('#')) return null
+  const eq = trimmed.indexOf('=')
+  if (eq === -1) return null
+  const key = trimmed.slice(0, eq).trim()
+  if (key === '') return null
+  let value = trimmed.slice(eq + 1).trim()
+  const quoted =
+    (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))
+  if (quoted && value.length >= 2) value = value.slice(1, -1)
+  return [key, value]
+}
+
 export function readEnvValue(path: string, key: string): string | undefined {
   if (!existsSync(path)) return undefined
   for (const line of readFileSync(path, 'utf8').split('\n')) {
-    if (line.startsWith(`${key}=`)) return line.slice(key.length + 1).trim()
+    const parsed = parseEnvLine(line)
+    if (parsed && parsed[0] === key) return parsed[1]
   }
   return undefined
 }
@@ -382,7 +410,9 @@ export function upsertEnv(path: string, updates: Record<string, string>) {
   while (lines.length > 0 && lines[lines.length - 1]?.trim() === '') lines.pop()
   for (const [key, value] of Object.entries(updates)) {
     const line = `${key}=${value}`
-    const index = lines.findIndex((existing) => existing.startsWith(`${key}=`))
+    // Match the parsed key, not a literal prefix, so a hand-edited `KEY = x`
+    // line is updated in place instead of leaving a stale duplicate.
+    const index = lines.findIndex((existing) => parseEnvLine(existing)?.[0] === key)
     if (index === -1) lines.push(line)
     else lines[index] = line
   }
@@ -399,21 +429,12 @@ export function upsertEnv(path: string, updates: Record<string, string>) {
 }
 
 // A dependency-free .env loader. process.loadEnvFile exists only on Node
-// >= 20.12 while engines allow >= 20, so parse the file directly: KEY=VALUE
-// lines, # comments, optional single/double quotes, real env always wins.
+// >= 20.12 while engines allow >= 20, so parse the file directly. Real env
+// always wins over the file.
 export function loadDotenv(path: string) {
   if (!existsSync(path)) return
   for (const line of readFileSync(path, 'utf8').split('\n')) {
-    const trimmed = line.trim()
-    if (trimmed === '' || trimmed.startsWith('#')) continue
-    const eq = trimmed.indexOf('=')
-    if (eq === -1) continue
-    const key = trimmed.slice(0, eq).trim()
-    let value = trimmed.slice(eq + 1).trim()
-    const quoted =
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    if (quoted && value.length >= 2) value = value.slice(1, -1)
-    if (key !== '' && !(key in process.env)) process.env[key] = value
+    const parsed = parseEnvLine(line)
+    if (parsed && !(parsed[0] in process.env)) process.env[parsed[0]] = parsed[1]
   }
 }

@@ -125,7 +125,8 @@ describe('createGate', () => {
     expect(await probe('/assets/..%5c..%5csecret')).toBe('html') // encoded backslash
     expect(await probe('/assets/..%252f..%252fsecret')).toBe('html') // double-encoded slash
     expect(await probe('/assets/%2e%2e%2fsecret')).toBe('html') // encoded dot+slash
-    expect(await probe('/assets/..;/secret')).toBe('html') // path-parameter segment
+    expect(await probe('/assets/..;/secret')).toBe('html') // literal path-parameter segment
+    expect(await probe('/assets/..%3b/secret')).toBe('html') // encoded semicolon
   })
 
   it('7d. a "/" or empty publicPaths entry does not un-gate the whole site', async () => {
@@ -234,20 +235,22 @@ describe('createGate', () => {
     expect(res.body).toContain('false')
   })
 
-  it('19. onAuthFailure fires on a wrong password and a throwing observer is contained', async () => {
-    const seen: string[] = []
+  it('19. onAuthFailure fires with a redacted view; a throwing observer is contained', async () => {
+    const seen: Array<{ method: string; path: string }> = []
     const g = gate({
-      onAuthFailure: (request) => {
-        seen.push(request.path)
+      onAuthFailure: (info) => {
+        seen.push(info)
         throw new Error('observer blew up')
       },
     })
     const res = await login(g, 'nope')
     expect(asHtml(res).status).toBe(401)
-    expect(seen).toEqual(['/__gate'])
+    expect(seen).toEqual([{ method: 'POST', path: '/__gate' }])
+    // The redacted payload carries no password or cookie field to leak into logs.
+    expect(Object.keys(seen[0] ?? {}).sort()).toEqual(['method', 'path'])
     // A correct login must not fire it.
     asRedirect(await login(g, PASSWORD))
-    expect(seen).toEqual(['/__gate'])
+    expect(seen).toHaveLength(1)
   })
 
   it('20. malformed session tokens are rejected, not thrown', async () => {
