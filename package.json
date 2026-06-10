@@ -1,6 +1,6 @@
 {
   "name": "sitepass",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Put one shared password in front of any web app. No database, no accounts, no auth provider.",
   "type": "module",
   "license": "MIT",
