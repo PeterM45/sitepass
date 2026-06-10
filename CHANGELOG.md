@@ -66,6 +66,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never resolves to 0.2.x), pins a wrangler `compatibility_date`, and its
   README warns that plain `vite dev` serves the SPA ungated.
 
+### Changed
+
+- **Build:** the published files keep their `node:`-prefixed builtin imports
+  (tsup's default stripped the prefix). The prefixed form cannot be shadowed
+  by a userland module and is what modern runtimes expect.
+- **Astro:** the CJS build no longer carries an unreachable `import.meta`
+  branch behind a `require('url')` shim — the env probe compiles to inert
+  `undefined` under CJS, with identical behavior in every runtime.
+
 ### Added
 
 - **Reverse proxy: `trustProxy` option and `--trust-proxy` flag** for
