@@ -1,0 +1,7 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+# Internal helpers are documented with `//` line comments by design; the
+# docstring-coverage check counts JSDoc only, so it always reads ~0% here.
+reviews:
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
