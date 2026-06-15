@@ -125,7 +125,7 @@ async function runInit(flags: Flags) {
   console.log(
     `\nNever commit ${envPath}: SITEPASS_SECRET signs every session token, so leaking it lets anyone forge a login.`,
   )
-  console.log(`\n${snippetFor(target)}`)
+  console.log(`\n${SNIPPETS[target]}`)
 }
 
 // Keep the signing secret out of version control. A committed SITEPASS_SECRET
@@ -248,10 +248,6 @@ async function resolveTarget(flags: Flags): Promise<Target> {
 
 function generateSecret(): string {
   return randomBytes(32).toString('base64')
-}
-
-function snippetFor(target: Target): string {
-  return SNIPPETS[target]
 }
 
 function printHelp() {

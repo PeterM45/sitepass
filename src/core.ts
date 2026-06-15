@@ -287,7 +287,7 @@ export function createGate(options: GateOptions): Gate {
     const body = options.renderLoginPage
       ? options.renderLoginPage({ loginPath, next, error, brand })
       : renderDefaultLoginPage(brand, loginPath, next, error)
-    return { type: 'html', status, body, headers: htmlHeaders() }
+    return { type: 'html', status, body, headers: HTML_HEADERS }
   }
 
   function notConfiguredPage(): GateResult {
@@ -295,7 +295,7 @@ export function createGate(options: GateOptions): Gate {
       type: 'html',
       status: 503,
       body: renderNotConfiguredPage(brand),
-      headers: htmlHeaders(),
+      headers: HTML_HEADERS,
     }
   }
 
@@ -318,8 +318,9 @@ export function readCookie(
 
 const nowSeconds = () => Math.floor(Date.now() / 1000)
 
-function htmlHeaders(): Record<string, string> {
-  return { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
+const HTML_HEADERS: Record<string, string> = {
+  'Content-Type': 'text/html; charset=utf-8',
+  'Cache-Control': 'no-store',
 }
 
 function isPublicPath(path: string, publicPaths: readonly string[]): boolean {
